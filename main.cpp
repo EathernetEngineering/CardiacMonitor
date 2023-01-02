@@ -80,8 +80,12 @@ void updateTime() {
 	}
 }
 
-void updateSerial(cee::monitor::Serial& ser) {
-
+void updateSerial(cee::monitor::Serial& Ser) {
+	Ser.Read();
+	if (*((char*)Ser.GetReadBuffer()) != 0) {
+		fprintf(stderr, (char*)Ser.GetReadBuffer());
+		Ser.Consume(strlen((char*)Ser.GetReadBuffer()));
+	}
 }
 
 int main(int argc, char** arg) {

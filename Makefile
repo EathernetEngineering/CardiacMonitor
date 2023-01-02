@@ -16,9 +16,12 @@ all: monitor
 monitor: $(OBJECTS)
 	g++ -o $@ $^ $(LDFLAGS)
 
-.PHONY: run clean
+.PHONY: run debug clean
 run: monitor
 	./monitor
+
+debug: monitor
+	gdb ./monitor
 
 clean:
 	-rm -rf play.out
