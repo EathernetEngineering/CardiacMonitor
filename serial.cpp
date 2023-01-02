@@ -67,8 +67,9 @@ namespace cee {
 				error("Out of memory!");
 				this->Panic(EXIT_FAILURE);
 			}
+			m_ReadBufferLength = 8192;
 
-			memset(m_ReadBuffer, 0, sizeof(m_ReadBuffer));
+			memset(m_ReadBuffer, 0, m_ReadBufferLength);
 		}
 
 		Serial::~Serial() {
@@ -80,6 +81,7 @@ namespace cee {
 			if (m_ReadBuffer != nullptr) {
 				free(m_ReadBuffer);
 				m_ReadBuffer = nullptr;
+				m_ReadBufferLength = 0;
 			}
 
 		}
@@ -93,20 +95,25 @@ namespace cee {
 			if (m_ReadBuffer != nullptr) {
 				free(m_ReadBuffer);
 				m_ReadBuffer = nullptr;
+				m_ReadBufferLength = 0;
 			}
 
 			raise(SIGABRT);
 		}
 
-		const uint8_t* Serial::GetReadBuffer() {
+		const uint8_t* Serial::GetReadBuffer() const {
 			return m_ReadBuffer;
 		}
 
-		void Serial::Read() {
-			if (m_Index < sizeof(m_ReadBuffer) - 512)
-				this->Consume(sizeof(m_ReadBuffer) - m_Index);
+		int Serial::GetBuffered() const {
+			return m_Index;
+		}
 
-			int err = read(m_Fd, m_ReadBuffer + m_Index, sizeof(m_ReadBuffer) - m_Index);
+		int Serial::Read() {
+			if (m_Index > m_ReadBufferLength - 512)
+				this->Consume(512);
+
+			int err = read(m_Fd, m_ReadBuffer + m_Index, m_ReadBufferLength - m_Index);
 			if (err < 0) {
 				char s[FILENAME_MAX];
 				sprintf(s, "Failed read port (%i): %s\n", errno, strerror(errno));
@@ -114,6 +121,7 @@ namespace cee {
 				this->Panic(EXIT_FAILURE);
 			}
 			m_Index += err;
+			return err;
 		}
 
 		int Serial::Consume(size_t bytes) {
@@ -122,7 +130,7 @@ namespace cee {
 			memmove(m_ReadBuffer, m_ReadBuffer + bytes, m_Index - bytes);
 
 			m_Index -= bytes;
-			memset(m_ReadBuffer + m_Index, 0, sizeof(m_ReadBuffer) - m_Index);
+			memset(m_ReadBuffer + m_Index, 0, m_ReadBufferLength - m_Index);
 			return bytes;
 		}
 	}

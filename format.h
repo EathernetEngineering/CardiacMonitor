@@ -1,8 +1,7 @@
 #ifndef __FORMAT_HPP
 #define __FORMAT_HPP
 
-#include <endian.h>
-#include <byteswap.h>
+#include "util.h"
 
 #define VOC_MAGIC_STRING "Creative Voice File\x1A"
 #define VOC_ACTUAL_VERSION 0x010A
@@ -38,16 +37,8 @@ typedef struct {
 
 #if __BYTE_ORDER == __LITTLE_ENDIAN
 #define MAGIC_ENDIAN(x, y, z, w) ((x) | ((y) << 8) | ((z) << 16) | ((w) << 24))
-#define LE_SHORT(v)              (v)
-#define LE_INT(v)                (v)
-#define BE_SHORT(v)              bswap_16(v)
-#define BE_INT(v)                bswap_32(v)
 #elif __BYTE_ORDER == __BIG_ENDIAN
 #define MAGIC_ENDIAN(x, y, z, w) ((w) | ((z) << 8) | ((y) << 16) | ((x) << 24))
-#define LE_SHORT(v)              bswap_16(v)
-#define LE_INT(v)                bswap_32(v)
-#define BE_SHORT(v)              (v)
-#define BE_INT(v)                (v)
 #else
 #error "Wrong Endian"
 #endif

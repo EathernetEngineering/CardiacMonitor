@@ -8,6 +8,7 @@
 #include "play.h"
 #include "serial.h"
 #include "util.h"
+#include "common.h"
 
 void signalHandler(int signum) {
 	static int inAborting = false;
@@ -82,9 +83,22 @@ void updateTime() {
 
 void updateSerial(cee::monitor::Serial& Ser) {
 	Ser.Read();
-	if (*((char*)Ser.GetReadBuffer()) != 0) {
-		fprintf(stderr, (char*)Ser.GetReadBuffer());
-		Ser.Consume(strlen((char*)Ser.GetReadBuffer()));
+	int buffered;
+	if ((buffered = Ser.GetBuffered()) >= sizeof(MonitorPacket)) {
+		for (uint32_t i = 0; i < buffered - sizeof(MonitorPacket); i++) {
+			if (strcmp((const char*)(Ser.GetReadBuffer() + i), MONITOR_MAGIC) == 0) {
+				const MonitorPacket* packet = reinterpret_cast<const MonitorPacket*>(Ser.GetReadBuffer() + i);
+				uint8_t checksum = 0;
+				for (size_t i = 0; i < sizeof(MonitorPacket); i++) {
+					checksum ^= ((uint8_t*)packet)[i];
+				}
+
+				fprintf(stderr, "Packet recieved:\n\e[32m\tLead I:   %i\n\tLead II:  %i\n\tLead III: %i\n\tResp:     %i\n\t\tchecksum = %i\e[0m\n",
+						LE_INT(packet->lead1), LE_INT(packet->lead2), LE_INT(packet->lead3), LE_INT(packet->resp), checksum);
+
+				Ser.Consume(sizeof(MonitorPacket) + i);
+			}
+		}
 	}
 }
 
