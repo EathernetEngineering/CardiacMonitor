@@ -9,6 +9,9 @@
 #include "serial.h"
 #include "util.h"
 #include "common.h"
+#include "graphics.h"
+
+bool terminate = false;
 
 void signalHandler(int signum) {
 	static int inAborting = false;
@@ -19,7 +22,7 @@ void signalHandler(int signum) {
 
 	fprintf(stderr, "Recieved signal: %s...\taborting.\n", strsignal(signum));
 
-	std::exit(signum);
+	terminate = true;
 }
 
 enum class AlarmSounds : int8_t {
@@ -38,6 +41,7 @@ static std::chrono::duration<long int, std::milli> g_AlarmTimes[] = {
 };
 
 static AlarmSounds alarmSound = AlarmSounds::NONE;
+static std::mutex alarmSoundMutex;
 
 void doAlarms() {
 	using namespace std::chrono_literals;
@@ -67,6 +71,9 @@ void doAlarms() {
 					break;
 			}
 		}
+		if (terminate) {
+			break;
+		}
 	}
 }
 
@@ -76,6 +83,7 @@ void updateTime() {
 
 	if (std::chrono::steady_clock::now() - start > 10s) {
 		start = std::chrono::steady_clock::now();
+		std::lock_guard<std::mutex> guard(alarmSoundMutex);
 		alarmSound = (AlarmSounds)(((int8_t)alarmSound) + 1);
 		if (alarmSound > AlarmSounds::RED) alarmSound = AlarmSounds::NONE;
 	}
@@ -108,14 +116,29 @@ int main(int argc, char** arg) {
 	signal(SIGABRT, signalHandler);
 	signal(SIGTERM, signalHandler);
 
+	ceeEglState* graphicsState = ceeGraphicsCreateState();
+	assert(graphicsState != 0);
+
+	ceeGraphicsInitialize(graphicsState);
+
 	std::thread alarmThread(doAlarms);
 
 	cee::monitor::Serial serial("/dev/ttyUSB0");
 
-	for (;;) {
+	while (!terminate) {
 		updateTime();
 		updateSerial(serial);
+
+		ceeGraphicsStartFrame(graphicsState);
+
+		ceeGraphicsClearColor(1.0f, 1.0f, 1.0f, 0.5f);
+
+		ceeGraphicsEndFrame(graphicsState);
 	}
+
+	alarmThread.join();
+
+	ceeGraphicsShutdown();
 
 	return EXIT_SUCCESS;
 }
