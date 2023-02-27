@@ -138,7 +138,8 @@ int main(int argc, char** arg) {
 
 	alarmThread.join();
 
-	ceeGraphicsShutdown();
+	ceeGraphicsShutdown(graphicsState);
+	ceeGraphicsDestroyState(graphicsState);
 
 	return EXIT_SUCCESS;
 }

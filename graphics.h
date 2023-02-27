@@ -10,7 +10,7 @@ extern "C" {
 ceeEglState* ceeGraphicsCreateState();
 void ceeGraphicsDestroyState(ceeEglState* state);
 void ceeGraphicsInitialize(ceeEglState* state);
-void ceeGraphicsShutdown();
+void ceeGraphicsShutdown(ceeEglState* state);
 int ceeGraphicsCreateShaderProgram(const char vertexSource[], const char fragmentSource[], unsigned* program);
 
 void ceeGraphicsStartFrame(ceeEglState* state);

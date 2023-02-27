@@ -133,6 +133,9 @@ void ceeGraphicsShutdown(ceeEglState* state) {
 	DISPMANX_UPDATE_HANDLE_T dispmanUpdate;
 	int result;
 
+	glClear(GL_COLOR_BUFFER_BIT);
+	eglSwapBuffers(state->display, state->surface);
+
 	eglDestroySurface(state->display, state->surface);
 
 	dispmanUpdate = vc_dispmanx_update_start(0);

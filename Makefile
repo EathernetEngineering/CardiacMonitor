@@ -27,11 +27,11 @@ debug: monitor
 clean:
 	-rm -rf play.out int/*
 
-int/%.o: %.c
+int/%.o: %.c $(HEADERS)
 	[ -d "./int/" ] || mkdir int/
-	${CC} -c ${CFLAGS} -o $@ $^
+	${CC} -c ${CFLAGS} -o $@ $<
 
-int/%.o: %.cpp
+int/%.o: %.cpp $(HEADERS)
 	[ -d "./int/" ] || mkdir int/
-	${CXX} -c ${CXXFLAGS} -o $@ $^
+	${CXX} -c ${CXXFLAGS} -o $@ $<
 
