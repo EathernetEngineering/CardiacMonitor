@@ -404,6 +404,7 @@ namespace cee {
 						m_HwParams.format = SND_PCM_FORMAT_FLOAT_LE;
 						break;
 					}
+					// fall through
 
 				default:
 					error("Unknown format");
@@ -617,7 +618,8 @@ namespace cee {
 		}
 
 		void LinuxAudio::PlaybackGo() {
-			uint32_t l, r;
+			uint32_t l;
+			int32_t r;
 			uint32_t loaded = m_AudioBufferSize;
 			uint32_t written = 0;
 			off64_t c;
@@ -653,7 +655,7 @@ namespace cee {
 				} while((size_t)l < m_ChunkBytes);
 				l = l * 8 / m_BitsPerFrame;
 				r = this->PcmWrite(m_AudioBuffer, l);
-				if (r != l)
+				if (r != (int32_t)l)
 					break;
 				
 				r = r * m_BitsPerFrame / 8;

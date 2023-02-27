@@ -24,5 +24,13 @@
 	fprintf(stderr, "\e[1;31m[Error from %s:%i]: %s\e[0m\n", __FILE__, __LINE__, msg); \
 	} while (0)
 
+inline uint8_t checksum(uint8_t* ptr, size_t sz) {
+	uint8_t chk = 0;
+	while (sz-- != 0){
+		chk -= *ptr++;
+	}
+	return chk;
+}
+
 #endif
 

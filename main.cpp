@@ -112,15 +112,16 @@ void updateSerial(cee::monitor::Serial& Ser) {
 		for (uint32_t i = 0; i < buffered - sizeof(MonitorPacket); i++) {
 			if (strcmp((const char*)(Ser.GetReadBuffer() + i), MONITOR_MAGIC) == 0) {
 				const MonitorPacket* packet = reinterpret_cast<const MonitorPacket*>(Ser.GetReadBuffer() + i);
-				uint8_t checksum = 0;
-				for (size_t i = 0; i < sizeof(MonitorPacket); i++) {
-					checksum += ((uint8_t*)packet)[i];
+				uint8_t chk = checksum((uint8_t*)packet, sizeof(MonitorPacket));
+				if (chk != 0) {
+					fprintf(stderr, "\e[1;93mChecksum failed. discarding packet.\n\e[0m");
+					continue;
 				}
 
-				fprintf(stderr, "Packet recieved:\n\e[32m\tLead I:   %i\n\tLead II:  %i\n\tLead III: %i\n\tResp:     %i\n"
-						"\tchecksum = %i\n\tmagic: %.4s\e[0m\n",
-						LE_INT(packet->lead1), LE_INT(packet->lead2), LE_INT(packet->lead3), LE_INT(packet->resp), checksum,
-						packet->magic);
+//				fprintf(stderr, "Packet recieved:\n\e[32m\tLead I:   %i\n\tLead II:  %i\n\tLead III: %i\n\tResp:     %i\n"
+//						"\tchecksum = %i\n\tmagic: %.4s\n\n\tChk = %u\e[0m\n",
+//						LE_INT(packet->lead1), LE_INT(packet->lead2), LE_INT(packet->lead3), LE_INT(packet->resp), chk,
+//						packet->magic, chk);
 
 				Ser.Consume(sizeof(MonitorPacket) + i);
 			}
