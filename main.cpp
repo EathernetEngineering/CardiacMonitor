@@ -11,6 +11,17 @@
 #include "common.h"
 #include "graphics.h"
 
+#define ECG_DATA_POINTS          6000
+#define ECG_DATA_TIME_MS         60000
+#define ECG_DATA_MS_PER_POINT    (ECG_DATA_TIME_MS / ECG_DATA_POINTS)
+
+struct _data {
+	uint32_t leadI[ECG_DATA_POINTS];
+	uint32_t leadII[ECG_DATA_POINTS];
+	uint32_t leadIII[ECG_DATA_POINTS];
+	uint32_t resp[ECG_DATA_POINTS];
+} g_Data;
+
 bool terminate = false;
 
 void signalHandler(int signum) {
@@ -69,6 +80,11 @@ void doAlarms() {
 				case AlarmSounds::RED:
 					redAlarm.Playback();
 					break;
+
+				default:
+					fprintf(stderr, "\e[32mWarning: Unknown alarm sound, setting to red.");
+					std::lock_guard<std::mutex> guard(alarmSoundMutex);
+					alarmSound = AlarmSounds::RED;
 			}
 		}
 		if (terminate) {
@@ -91,18 +107,20 @@ void updateTime() {
 
 void updateSerial(cee::monitor::Serial& Ser) {
 	Ser.Read();
-	int buffered;
+	uint32_t buffered;
 	if ((buffered = Ser.GetBuffered()) >= sizeof(MonitorPacket)) {
 		for (uint32_t i = 0; i < buffered - sizeof(MonitorPacket); i++) {
 			if (strcmp((const char*)(Ser.GetReadBuffer() + i), MONITOR_MAGIC) == 0) {
 				const MonitorPacket* packet = reinterpret_cast<const MonitorPacket*>(Ser.GetReadBuffer() + i);
 				uint8_t checksum = 0;
 				for (size_t i = 0; i < sizeof(MonitorPacket); i++) {
-					checksum ^= ((uint8_t*)packet)[i];
+					checksum += ((uint8_t*)packet)[i];
 				}
 
-				fprintf(stderr, "Packet recieved:\n\e[32m\tLead I:   %i\n\tLead II:  %i\n\tLead III: %i\n\tResp:     %i\n\t\tchecksum = %i\e[0m\n",
-						LE_INT(packet->lead1), LE_INT(packet->lead2), LE_INT(packet->lead3), LE_INT(packet->resp), checksum);
+				fprintf(stderr, "Packet recieved:\n\e[32m\tLead I:   %i\n\tLead II:  %i\n\tLead III: %i\n\tResp:     %i\n"
+						"\tchecksum = %i\n\tmagic: %.4s\e[0m\n",
+						LE_INT(packet->lead1), LE_INT(packet->lead2), LE_INT(packet->lead3), LE_INT(packet->resp), checksum,
+						packet->magic);
 
 				Ser.Consume(sizeof(MonitorPacket) + i);
 			}
@@ -131,7 +149,7 @@ int main(int argc, char** arg) {
 
 		ceeGraphicsStartFrame(graphicsState);
 
-		ceeGraphicsClearColor(1.0f, 1.0f, 1.0f, 0.5f);
+		ceeGraphicsClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 
 		ceeGraphicsEndFrame(graphicsState);
 	}

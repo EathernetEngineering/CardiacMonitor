@@ -125,7 +125,7 @@ namespace cee {
 		}
 
 		int Serial::Consume(size_t bytes) {
-			if (bytes > m_Index) return -1;
+			if (bytes > m_Index) bytes = m_Index;
 
 			memmove(m_ReadBuffer, m_ReadBuffer + bytes, m_Index - bytes);
 

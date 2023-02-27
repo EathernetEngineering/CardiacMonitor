@@ -272,7 +272,7 @@ namespace cee {
 				this->ReadWave();
 			} else if (((AuHeader*)m_FileBuffer)->magic == AU_MAGIC) {
 				this->ReadAu();
-			} else if ((const char*)((VocHeader*)m_FileBuffer)->magic == VOC_MAGIC_STRING) {
+			} else if (memcmp(((VocHeader*)m_FileBuffer)->magic, VOC_MAGIC_STRING, sizeof(VOC_MAGIC_STRING)) == 0) {
 				this->ReadVoc();
 			} else {
 				error("Unknown file type!");
@@ -353,7 +353,7 @@ namespace cee {
 			m_BytesRead =+ testWaveRead(m_Fd, buffer, pos, sizeof(WaveFmtBody));
 			if (chunkHeader->length < sizeof(WaveFmtBody)) {
 				char s[FILENAME_MAX];
-				sprintf(s, "Unknown 'fmt ' chunk size %s; should be at least %i", chunkHeader->length, sizeof(WaveFmtBody));
+				sprintf(s, "Unknown 'fmt ' chunk size %u; should be at least %u", chunkHeader->length, sizeof(WaveFmtBody));
 				error(s);
 				this->Panic(EXIT_FAILURE);
 			}
@@ -617,9 +617,9 @@ namespace cee {
 		}
 
 		void LinuxAudio::PlaybackGo() {
-			int l, r;
-			int loaded = m_AudioBufferSize;
-			int written = 0;
+			uint32_t l, r;
+			uint32_t loaded = m_AudioBufferSize;
+			uint32_t written = 0;
 			off64_t c;
 
 			while (loaded > m_ChunkBytes && written < m_PbrecCount) {

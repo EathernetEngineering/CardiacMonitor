@@ -21,7 +21,7 @@ namespace cee {
 
 			private:
 				int m_Fd = 0;
-				int m_Index = 0;
+				uint32_t m_Index = 0;
 				uint8_t* m_ReadBuffer = nullptr;
 				size_t m_ReadBufferLength = 0;
 		};

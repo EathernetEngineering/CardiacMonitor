@@ -8,8 +8,8 @@ CXX := /usr/bin/g++
 LD := /usr/bin/ld
 
 LDFLAGS  := -L/opt/vc/lib -lasound -lrt -lpthread -lm -lbcm_host -lbrcmEGL -lbrcmGLESv2
-CFLAGS := -g3 -O0 -x c -I/opt/vc/include
-CXXFLAGS := -g3 -O0 -x c++ -std=c++17 -I/opt/vc/include
+CFLAGS := -g3 -O0 -x c -Wall -I/opt/vc/include
+CXXFLAGS := -g3 -O0 -x c++ -std=c++17 -Wall -I/opt/vc/include
 
 .PHONY: all
 all: monitor
