@@ -1,5 +1,5 @@
-SOURCES  := main.cpp play.cpp serial.cpp graphics.c
-HEADERS  := play.h serial.h util.h format.h graphics.h
+SOURCES  := main.cpp play.cpp serial.cpp graphics.c graph.c
+HEADERS  := play.h serial.h util.h format.h graphics.h graph.h
 
 OBJECTS  := $(patsubst %.c,int/%.o,$(patsubst %.cpp,int/%.o,$(SOURCES)))
 
@@ -15,7 +15,7 @@ CXXFLAGS := -g3 -O0 -x c++ -std=c++17 -Wall -I/opt/vc/include
 all: monitor
 
 monitor: $(OBJECTS)
-	g++ -o $@ $^ $(LDFLAGS)
+	${CXX} -o $@ $^ $(LDFLAGS)
 
 .PHONY: run debug clean
 run: monitor

@@ -18,9 +18,43 @@
 #include <EGL/eglext.h>
 
 static EGLint ceeGraphicsCompileShader(GLenum type, const char source[], GLuint* shader);
-static void ceeGraphicsSwapBuffers(ceeEglState* state);
+static void ceeGraphicsSwapBuffers(ceeGraphicsState* state);
 
-struct _ceeEglState {
+static GLuint getComponentCount(int type) {
+	switch (type) {
+	case GL_TYPE_BOOL:      return 1;
+	case GL_TYPE_INT:       return 1;
+	case GL_TYPE_INT2:      return 2;
+	case GL_TYPE_INT3:      return 3;
+	case GL_TYPE_INT4:      return 4;
+	case GL_TYPE_FLOAT:     return 1;
+	case GL_TYPE_FLOAT2:    return 2;
+	case GL_TYPE_FLOAT3:    return 3;
+	case GL_TYPE_FLOAT4:    return 4;
+	case GL_TYPE_MAT3:      return 3 * 3;
+	case GL_TYPE_MAT4:      return 4 * 4;
+	}
+	assert(0);
+}
+
+static GLenum dataTypeToGlBaseType(int type) {
+	switch (type) {
+	case GL_TYPE_BOOL:      return GL_BOOL;
+	case GL_TYPE_INT:       return GL_INT;
+	case GL_TYPE_INT2:      return GL_INT;
+	case GL_TYPE_INT3:      return GL_INT;
+	case GL_TYPE_INT4:      return GL_INT;
+	case GL_TYPE_FLOAT:     return GL_FLOAT;
+	case GL_TYPE_FLOAT2:    return GL_FLOAT;
+	case GL_TYPE_FLOAT3:    return GL_FLOAT;
+	case GL_TYPE_FLOAT4:    return GL_FLOAT;
+	case GL_TYPE_MAT3:      return GL_FLOAT;
+	case GL_TYPE_MAT4:      return GL_FLOAT;
+	}
+	assert(0);
+}
+
+struct _ceeGraphicsState {
 	GLuint screenWidth;
 	GLuint screenHeight;
 
@@ -34,15 +68,15 @@ struct _ceeEglState {
 	DISPMANX_ELEMENT_HANDLE_T dispmanElement;
 };
 
-ceeEglState* ceeGraphicsCreateState() {
-	return calloc(1, sizeof(struct _ceeEglState));
+ceeGraphicsState* ceeGraphicsCreateState() {
+	return calloc(1, sizeof(struct _ceeGraphicsState));
 }
 
-void ceeGraphicsDestroyState(ceeEglState* state) {
+void ceeGraphicsDestroyState(ceeGraphicsState* state) {
 	free(state);
 }
 
-void ceeGraphicsInitialize(ceeEglState* state) {
+void ceeGraphicsInitialize(ceeGraphicsState* state) {
 	static EGL_DISPMANX_WINDOW_T nativeWindow;
 
 	DISPMANX_UPDATE_HANDLE_T dispmanUpdate;
@@ -59,7 +93,7 @@ void ceeGraphicsInitialize(ceeEglState* state) {
 		EGL_NONE
 	};
 
-	EGLint contextAttribs[] = {
+	EGLint const contextAttribs[] = {
 		EGL_CONTEXT_CLIENT_VERSION, 2,
 		EGL_NONE
 	};
@@ -70,7 +104,7 @@ void ceeGraphicsInitialize(ceeEglState* state) {
 	EGLBoolean result;
 	int32_t success = 0;
 
-	memset(state, 0, sizeof(struct _ceeEglState));
+	memset(state, 0, sizeof(struct _ceeGraphicsState));
 
 	bcm_host_init();
 
@@ -126,10 +160,10 @@ void ceeGraphicsInitialize(ceeEglState* state) {
 
 	glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
 
-	glEnable(GL_CULL_FACE);
+	fprintf(stderr, "\e[0;32mGL Version: %s\e[0m\n", glGetString(GL_VERSION));
 }
 
-void ceeGraphicsShutdown(ceeEglState* state) {
+void ceeGraphicsShutdown(ceeGraphicsState* state) {
 	DISPMANX_UPDATE_HANDLE_T dispmanUpdate;
 	int result;
 
@@ -181,7 +215,14 @@ static EGLint ceeGraphicsCompileShader(GLenum type, const char source[], GLuint*
 	return GL_TRUE;
 }
 
-EGLint ceeGraphicsCreateShaderProgram(const char vertexSource[], const char fragmentSource[], GLuint* program) {
+EGLint ceeGraphicsCreateShaderProgram(
+		const char vertexSource[],
+		const char fragmentSource[],
+		GLuint* program,
+		const char* attributeNames[],
+		uint32_t attributeLocations[],
+		uint32_t attributeCount)
+{
 	GLuint vertexShader;
 	GLuint fragmentShader;
 	EGLint result;
@@ -192,9 +233,16 @@ EGLint ceeGraphicsCreateShaderProgram(const char vertexSource[], const char frag
 	result = ceeGraphicsCompileShader(GL_FRAGMENT_SHADER, fragmentSource, &fragmentShader);
 	if (result == GL_FALSE) { return result; }
 
+	*program = glCreateProgram();
+	if (*program == 0) {
+		return GL_FALSE;
+	}
+
 	glAttachShader(*program, vertexShader);
 	glAttachShader(*program, fragmentShader);
-	glBindAttribLocation(*program, 0, "aPosition");
+	for (uint32_t i = 0; i < attributeCount; i++) {
+		glBindAttribLocation(*program, attributeLocations[i], attributeNames[i]);
+	}
 	glLinkProgram(*program);
 
 	glGetProgramiv(*program, GL_LINK_STATUS, &linked);
@@ -223,16 +271,79 @@ EGLint ceeGraphicsCreateShaderProgram(const char vertexSource[], const char frag
 	return GL_TRUE;
 }
 
-static void ceeGraphicsSwapBuffers(ceeEglState* state) {
+void ceeGraphicsUseShaderProgram(uint32_t program) {
+	glUseProgram(program);
+}
+
+static void ceeGraphicsSwapBuffers(ceeGraphicsState* state) {
 	EGLBoolean result = eglSwapBuffers(state->display, state->surface);
 	assert(result != EGL_FALSE);
 }
 
-void ceeGraphicsStartFrame(ceeEglState* state) {
+void ceeGraphicsCreateVertexBuffer(uint32_t* buffer) {
+	glGenBuffers(1, buffer);
+}
+
+void ceeGraphicsBindVertexBuffer(uint32_t buffer) {
+	glBindBuffer(GL_ARRAY_BUFFER, buffer);
+}
+
+void ceeGraphicsUnbindVertexBuffer() {
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
+}
+
+void ceeGraphicsSetVertexBufferLayout(ceeGraphicsVertexBufferElement layout[], uint32_t elements, uint32_t stride) {
+	for (uint32_t i = 0; i < elements; i++) {
+		glVertexAttribPointer(i,
+				getComponentCount(layout[i].type),
+				dataTypeToGlBaseType(layout[i].type),
+				layout[i].normalized ? GL_TRUE : GL_FALSE,
+				stride,
+				(void*)layout[i].offset);
+		glEnableVertexAttribArray(i);
+	}
+}
+
+void ceeGraphicsSetVertices(float* vertices, uint32_t size) {
+	glBufferData(GL_ARRAY_BUFFER, size, vertices, GL_STATIC_DRAW);
+}
+
+void ceeGraphicsDeleteVertexBuffer(uint32_t* buffer) {
+	glDeleteBuffers(1, buffer);
+	*buffer = 0;
+}
+
+void ceeGraphicsCreateIndexBuffer(uint32_t* buffer) {
+	glGenBuffers(1, buffer);
+}
+
+void ceeGraphicsBindIndexBuffer(uint32_t buffer) {
+	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, buffer);
+}
+
+void ceeGraphicsUnbindIndexBuffer() {
+	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+}
+
+void ceeGraphicsSetIndices(uint16_t* indices, uint32_t size) {
+	glBufferData(GL_ELEMENT_ARRAY_BUFFER, size, indices, GL_STATIC_DRAW);
+}
+
+void ceeGraphicsDeleteIndexBuffer(uint32_t* buffer) {
+	glDeleteBuffers(1, buffer);
+	*buffer = 0;
+}
+
+void ceeGraphicsStartFrame(ceeGraphicsState* state) {
+	glViewport(0, 0, state->screenWidth, state->screenHeight);
 	glClear(GL_COLOR_BUFFER_BIT);
 }
 
-void ceeGraphicsEndFrame(ceeEglState* state) {
+void ceeGraphicsFlush(uint32_t indicesCount) {
+	glDrawElements(GL_TRIANGLES, indicesCount, GL_UNSIGNED_SHORT, (void*)0);
+}
+
+void ceeGraphicsEndFrame(ceeGraphicsState* state) {
 	ceeGraphicsSwapBuffers(state);
 }
 
