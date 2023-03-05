@@ -211,7 +211,7 @@ void ceeAudioPlay(ceeAudioState* state) {
 				}
 				else assert(0);
 			}
-			return;
+			break;
 		}
 		result = snd_pcm_writei(state->handle, state->audioBuffer + i, state->chunkSize);
 		if (result < 0) {
