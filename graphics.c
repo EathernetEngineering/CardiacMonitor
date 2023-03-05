@@ -68,11 +68,11 @@ struct _ceeGraphicsState {
 	DISPMANX_ELEMENT_HANDLE_T dispmanElement;
 };
 
-ceeGraphicsState* ceeGraphicsCreateState() {
+ceeGraphicsState* ceeGraphicsMallocState() {
 	return calloc(1, sizeof(struct _ceeGraphicsState));
 }
 
-void ceeGraphicsDestroyState(ceeGraphicsState* state) {
+void ceeGraphicsFreeState(ceeGraphicsState* state) {
 	free(state);
 }
 

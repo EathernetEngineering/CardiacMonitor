@@ -1,11 +1,15 @@
 #include <iostream>
 #include <chrono>
 #include <thread>
+#include <atomic>
 #include <mutex>
+
+#include <cassert>
+#include <cstring>
 
 #include <signal.h>
 
-#include "play.h"
+#include "audio.h"
 #include "serial.h"
 #include "util.h"
 #include "common.h"
@@ -24,7 +28,7 @@ struct _data {
 
 int g_Idx;
 
-bool terminate = false;
+std::atomic<bool> terminate = false;
 
 void signalHandler(int signum) {
 	static int inAborting = false;
@@ -60,9 +64,15 @@ void doAlarms() {
 	using namespace std::chrono_literals;
 
 	auto start = std::chrono::high_resolution_clock::now();
-	cee::monitor::LinuxAudio redAlarm("/home/chloe/Documents/Philips intellivue red.wav");
-	cee::monitor::LinuxAudio yellowAlarm("/home/chloe/Documents/Philips intellivue yellow.wav");
-	cee::monitor::LinuxAudio cyanAlarm("/home/chloe/Documents/Philips intellivue cyan.wav");
+	ceeAudioState* cyanAlarm = ceeAudioMallocState();
+	ceeAudioInitialize(cyanAlarm);
+	ceeAudioOpenWav(cyanAlarm, "/home/chloe/Documents/Philips intellivue cyan.wav");
+	ceeAudioState* yellowAlarm = ceeAudioMallocState();
+	ceeAudioInitialize(yellowAlarm);
+	ceeAudioOpenWav(yellowAlarm, "/home/chloe/Documents/Philips intellivue cyan.wav");
+	ceeAudioState* redAlarm = ceeAudioMallocState();
+	ceeAudioInitialize(redAlarm);
+	ceeAudioOpenWav(redAlarm, "/home/chloe/Documents/Philips intellivue cyan.wav");
 
 	for (;;) {
 		if ((std::chrono::high_resolution_clock::now() - start) > g_AlarmTimes[int(alarmSound)]) {
@@ -72,15 +82,15 @@ void doAlarms() {
 					break;
 
 				case AlarmSounds::CYAN:
-					cyanAlarm.Playback();
+					ceeAudioPlay(cyanAlarm);
 					break;
 
 				case AlarmSounds::YELLOW:
-					yellowAlarm.Playback();
+					ceeAudioPlay(yellowAlarm);
 					break;
 
 				case AlarmSounds::RED:
-					redAlarm.Playback();
+					ceeAudioPlay(redAlarm);
 					break;
 
 				default:
@@ -93,6 +103,12 @@ void doAlarms() {
 			break;
 		}
 	}
+	ceeAudioShutdown(cyanAlarm);
+	ceeAudioFreeState(cyanAlarm);
+	ceeAudioShutdown(yellowAlarm);
+	ceeAudioFreeState(yellowAlarm);
+	ceeAudioShutdown(redAlarm);
+	ceeAudioFreeState(redAlarm);
 }
 
 void updateTime() {
@@ -158,7 +174,7 @@ int main(int argc, char** arg) {
 	signal(SIGABRT, signalHandler);
 	signal(SIGTERM, signalHandler);
 
-	ceeGraphicsState* graphicsState = ceeGraphicsCreateState();
+	ceeGraphicsState* graphicsState = ceeGraphicsMallocState();
 	assert(graphicsState != 0);
 
 	ceeGraphicsInitialize(graphicsState);
@@ -234,9 +250,33 @@ int main(int argc, char** arg) {
 	ceeGraphicsBindIndexBuffer(ibo);
 	ceeGraphicsSetIndices(indices, 3 * sizeof(uint16_t));
 
+	uint16_t graphIndices[1440 * 2];
+	for (uint32_t i = 0; i < 1440; i++) {
+		graphIndices[(i * 2) + 0] = i;
+		graphIndices[(i * 2) + 1] = i;
+	}
+
+	float graphVertices[1440 * 8];
+
+	(void)graphIndices;
+	(void)graphVertices;
+
 	while (!terminate) {
 		updateTime();
 		updateSerial(serial);
+
+//		createGraphBuffer(
+//				g_Data.leadII,
+//				6000 * sizeof(int32_t),
+//				1440,
+//				0.7f,
+//				0.12f,
+//				false,
+//				0.0f,
+//				1.0f,
+//				0.0f,
+//				1.0f,
+//				&graphVertices);
 
 		ceeGraphicsStartFrame(graphicsState);
 
@@ -252,7 +292,7 @@ int main(int argc, char** arg) {
 	alarmThread.join();
 
 	ceeGraphicsShutdown(graphicsState);
-	ceeGraphicsDestroyState(graphicsState);
+	ceeGraphicsFreeState(graphicsState);
 
 	return EXIT_SUCCESS;
 }

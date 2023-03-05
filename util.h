@@ -4,7 +4,11 @@
 #include <endian.h>
 #include <byteswap.h>
 
+#if defined(__cplusplus)
 #include <cstdio>
+#else
+#include <stdio.h>
+#endif
 
 #if __BYTE_ORDER == __LITTLE_ENDIAN
 #define LE_SHORT(v)              (v)

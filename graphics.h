@@ -29,8 +29,8 @@ typedef struct _ceeGraphicsVertexBufferElement {
 extern "C" {
 #endif
 
-ceeGraphicsState* ceeGraphicsCreateState();
-void ceeGraphicsDestroyState(ceeGraphicsState* state);
+ceeGraphicsState* ceeGraphicsMallocState();
+void ceeGraphicsFreeState(ceeGraphicsState* state);
 void ceeGraphicsInitialize(ceeGraphicsState* state);
 void ceeGraphicsShutdown(ceeGraphicsState* state);
 int32_t ceeGraphicsCreateShaderProgram(

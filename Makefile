@@ -1,5 +1,5 @@
-SOURCES  := main.cpp play.cpp serial.cpp graphics.c graph.c
-HEADERS  := play.h serial.h util.h format.h graphics.h graph.h
+SOURCES := main.cpp audio.c serial.cpp graphics.c
+HEADERS := audio.h serial.h util.h audioFormat.h common.h graphics.h
 
 OBJECTS  := $(patsubst %.c,int/%.o,$(patsubst %.cpp,int/%.o,$(SOURCES)))
 
