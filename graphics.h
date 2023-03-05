@@ -51,6 +51,7 @@ void ceeGraphicsBindVertexBuffer(uint32_t buffer);
 void ceeGraphicsUnbindVertexBuffer();
 void ceeGraphicsSetVertexBufferLayout(ceeGraphicsVertexBufferElement layout[], uint32_t elements, uint32_t stride);
 void ceeGraphicsSetVertices(float* vertices, uint32_t size);
+void ceeGraphicsSetSubVertices(float* vertices, uint32_t size);
 void ceeGraphicsDeleteVertexBuffer(uint32_t* buffer);
 
 void ceeGraphicsCreateIndexBuffer(uint32_t* buffer);
@@ -60,7 +61,8 @@ void ceeGraphicsSetIndices(uint16_t* indices, uint32_t size);
 void ceeGraphicsDeleteIndexBuffer(uint32_t* buffer);
 
 void ceeGraphicsStartFrame(ceeGraphicsState* state);
-void ceeGraphicsFlush(uint32_t indicesCount);
+void ceeGraphicsFlushTriangles(uint32_t indicesCount);
+void ceeGraphicsFlushLines(uint32_t indicesCount);
 void ceeGraphicsEndFrame(ceeGraphicsState* state);
 
 void ceeGraphicsClearColor(float r, float g, float b, float a);

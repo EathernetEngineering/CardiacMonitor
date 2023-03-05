@@ -1,5 +1,5 @@
-SOURCES := main.cpp audio.c serial.cpp graphics.c
-HEADERS := audio.h serial.h util.h audioFormat.h common.h graphics.h
+SOURCES := main.cpp audio.c serial.cpp graphics.c graph.c
+HEADERS := audio.h serial.h util.h audioFormat.h common.h graphics.h graph.h
 
 OBJECTS  := $(patsubst %.c,int/%.o,$(patsubst %.cpp,int/%.o,$(SOURCES)))
 
@@ -8,8 +8,8 @@ CXX := /usr/bin/g++
 LD := /usr/bin/ld
 
 LDFLAGS  := -L/opt/vc/lib -lasound -lrt -lpthread -lm -lbcm_host -lbrcmEGL -lbrcmGLESv2
-CFLAGS := -g3 -O0 -x c -Wall -I/opt/vc/include
-CXXFLAGS := -g3 -O0 -x c++ -std=c++17 -Wall -I/opt/vc/include
+CFLAGS := -g3 -O3 -x c -Wall -I/opt/vc/include
+CXXFLAGS := -g3 -O3 -x c++ -std=c++17 -Wall -I/opt/vc/include
 
 .PHONY: all
 all: monitor
@@ -25,7 +25,7 @@ debug: monitor
 	gdb ./monitor
 
 clean:
-	-rm -rf play.out int/*
+	-rm -rf monitor int/*
 
 int/%.o: %.c $(HEADERS)
 	[ -d "./int/" ] || mkdir int/

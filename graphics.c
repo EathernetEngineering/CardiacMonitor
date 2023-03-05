@@ -305,7 +305,11 @@ void ceeGraphicsSetVertexBufferLayout(ceeGraphicsVertexBufferElement layout[], u
 }
 
 void ceeGraphicsSetVertices(float* vertices, uint32_t size) {
-	glBufferData(GL_ARRAY_BUFFER, size, vertices, GL_STATIC_DRAW);
+	glBufferData(GL_ARRAY_BUFFER, size, vertices, GL_DYNAMIC_DRAW);
+}
+
+void ceeGraphicsSetSubVertices(float* vertices, uint32_t size) {
+	glBufferSubData(GL_ARRAY_BUFFER, 0, size, vertices);
 }
 
 void ceeGraphicsDeleteVertexBuffer(uint32_t* buffer) {
@@ -339,8 +343,12 @@ void ceeGraphicsStartFrame(ceeGraphicsState* state) {
 	glClear(GL_COLOR_BUFFER_BIT);
 }
 
-void ceeGraphicsFlush(uint32_t indicesCount) {
+void ceeGraphicsFlushTriangles(uint32_t indicesCount) {
 	glDrawElements(GL_TRIANGLES, indicesCount, GL_UNSIGNED_SHORT, (void*)0);
+}
+
+void ceeGraphicsFlushLines(uint32_t indicesCount) {
+	glDrawElements(GL_LINES, indicesCount, GL_UNSIGNED_SHORT, (void*)0);
 }
 
 void ceeGraphicsEndFrame(ceeGraphicsState* state) {
