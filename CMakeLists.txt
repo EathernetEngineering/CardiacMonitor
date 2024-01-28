@@ -3,9 +3,9 @@ cmake_minimum_required(VERSION 3.5)
 project(CeeCardiacMonitor LANGUAGES C CXX)
 
 list(APPEND SOURCES main.cc serial.cc graph.c graphics.c audio.c)
-list(APPEND INCLUDEDIRS /opt/vc/include)
-list(APPEND LIBRARYDIRS /opt/vc/lib)
-list(APPEND LIBRARIES m pthread rt asound bcm_host brcmEGL brcmGLESv2)
+list(APPEND INCLUDEDIRS /usr/include /usr/include/libdrm)
+list(APPEND LIBRARYDIRS /usr/lib/arm-linux-gnueabihf)
+list(APPEND LIBRARIES m pthread drm gbm rt asound bcm_host EGL GLESv2)
 
 add_executable(CardiacMonitor ${SOURCES})
 

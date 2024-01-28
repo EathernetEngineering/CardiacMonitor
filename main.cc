@@ -69,13 +69,13 @@ void doAlarms() {
 	auto start = std::chrono::high_resolution_clock::now();
 	ceeAudioState* cyanAlarm = ceeAudioMallocState();
 	ceeAudioInitialize(cyanAlarm);
-	ceeAudioOpenWav(cyanAlarm, "/home/chloe/Documents/Philips intellivue cyan.wav");
+	ceeAudioOpenWav(cyanAlarm, "/home/chloe/Music/Philips intellivue cyan.wav");
 	ceeAudioState* yellowAlarm = ceeAudioMallocState();
 	ceeAudioInitialize(yellowAlarm);
-	ceeAudioOpenWav(yellowAlarm, "/home/chloe/Documents/Philips intellivue cyan.wav");
+	ceeAudioOpenWav(yellowAlarm, "/home/chloe/Music/Philips intellivue cyan.wav");
 	ceeAudioState* redAlarm = ceeAudioMallocState();
 	ceeAudioInitialize(redAlarm);
-	ceeAudioOpenWav(redAlarm, "/home/chloe/Documents/Philips intellivue cyan.wav");
+	ceeAudioOpenWav(redAlarm, "/home/chloe/Music/Philips intellivue cyan.wav");
 
 	for (;;) {
 		if ((std::chrono::high_resolution_clock::now() - start) > g_AlarmTimes[int(alarmSound)]) {

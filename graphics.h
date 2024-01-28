@@ -3,6 +3,11 @@
 
 #include <stdint.h>
 
+#include <GLES2/gl2.h>
+#include <GLES2/gl2ext.h>
+#include <EGL/egl.h>
+#include <EGL/eglext.h>
+
 enum GlDataType {
 	GL_TYPE_BOOL,
 	GL_TYPE_INT,
@@ -29,6 +34,31 @@ typedef struct _ceeGraphicsVertexBufferElement {
 extern "C" {
 #endif
 
+#ifndef DRM_FORMAT_MOD_LINEAR
+#define DRM_FORMAT_MOD_LINEAR 0
+#endif
+
+#ifndef DRM_FORMAT_MOD_INVALID
+#define DRM_FORMAT_MOD_INVALID ((((__u64)0) << 56) | ((1ULL << 56) - 1))
+#endif
+
+#ifndef EGL_KHR_platform_gbm
+#define EGL_KHR_platform_gbm 1
+#define EGL_PLATFORM_GBM_KHR              0x31D7
+#endif /* EGL_KHR_platform_gbm */
+
+#ifndef EGL_EXT_platform_base
+#define EGL_EXT_platform_base 1
+typedef EGLDisplay (EGLAPIENTRYP PFNEGLGETPLATFORMDISPLAYEXTPROC) (EGLenum platform, void *native_display, const EGLint *attrib_list);
+typedef EGLSurface (EGLAPIENTRYP PFNEGLCREATEPLATFORMWINDOWSURFACEEXTPROC) (EGLDisplay dpy, EGLConfig config, void *native_window, const EGLint *attrib_list);
+typedef EGLSurface (EGLAPIENTRYP PFNEGLCREATEPLATFORMPIXMAPSURFACEEXTPROC) (EGLDisplay dpy, EGLConfig config, void *native_pixmap, const EGLint *attrib_list);
+#ifdef EGL_EGLEXT_PROTOTYPES
+EGLAPI EGLDisplay EGLAPIENTRY eglGetPlatformDisplayEXT (EGLenum platform, void *native_display, const EGLint *attrib_list);
+EGLAPI EGLSurface EGLAPIENTRY eglCreatePlatformWindowSurfaceEXT (EGLDisplay dpy, EGLConfig config, void *native_window, const EGLint *attrib_list);
+EGLAPI EGLSurface EGLAPIENTRY eglCreatePlatformPixmapSurfaceEXT (EGLDisplay dpy, EGLConfig config, void *native_pixmap, const EGLint *attrib_list);
+#endif
+#endif /* EGL_EXT_platform_base */
+
 ceeGraphicsState* ceeGraphicsMallocState();
 void ceeGraphicsFreeState(ceeGraphicsState* state);
 void ceeGraphicsInitialize(ceeGraphicsState* state);
@@ -42,10 +72,6 @@ int32_t ceeGraphicsCreateShaderProgram(
 		uint32_t attributeCount);
 void ceeGraphicsUseShaderProgram(uint32_t program);
 
-
-/**
- *  IMPORTANT!! ONLY COMPATIBLE WITH STATIC DRAW!!
- */
 void ceeGraphicsCreateVertexBuffer(uint32_t* buffer);
 void ceeGraphicsBindVertexBuffer(uint32_t buffer);
 void ceeGraphicsUnbindVertexBuffer();

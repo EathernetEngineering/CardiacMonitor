@@ -1,11 +1,13 @@
 #include "graphics.h"
 
+#include <EGL/eglplatform.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stddef.h>
 #include <errno.h>
 #include <assert.h>
+#include <stdbool.h>
 
 #include <unistd.h>
 #include <fcntl.h>
@@ -14,11 +16,20 @@
 #include <bcm_host.h>
 
 #include <GLES2/gl2.h>
+#include <GLES2/gl2ext.h>
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 
+#include <xf86drm.h>
+#include <xf86drmMode.h>
+
+#include <gbm.h>
+
 static EGLint ceeGraphicsCompileShader(GLenum type, const char source[], GLuint* shader);
 static void ceeGraphicsSwapBuffers(ceeGraphicsState* state);
+static uint32_t FindCrtcIdForEncoder(const drmModeRes* resources, const drmModeEncoder* encoder);
+static uint32_t FindCrtcIdForConnector(const ceeGraphicsState* state, const drmModeRes* resources, const drmModeConnector* connector);
+static bool HasExt(const char *extensionList, const char *ext);
 
 static GLuint getComponentCount(int type) {
 	switch (type) {
@@ -54,6 +65,12 @@ static GLenum dataTypeToGlBaseType(int type) {
 	assert(0);
 }
 
+struct DrmConnector {
+	drmModeConnector* connector;
+	drmModeObjectProperties* properties;
+	drmModePropertyRes** propertyResources;
+};
+
 struct _ceeGraphicsState {
 	GLuint screenWidth;
 	GLuint screenHeight;
@@ -66,6 +83,18 @@ struct _ceeGraphicsState {
 
 	DISPMANX_DISPLAY_HANDLE_T dispmanDisplay;
 	DISPMANX_ELEMENT_HANDLE_T dispmanElement;
+
+	int32_t DrmFd;
+	struct DrmConnector DrmConnector;
+	uint32_t DrmConnectorId;
+	int32_t DrmCrtcId;
+	uint32_t DrmCrtcIndex;
+	drmModeModeInfo* DrmMode;
+
+	struct gbm_device* GbmDevice;
+	struct gbm_surface* GbmSurface;
+	uint32_t SurfaceWidth, SurfaceHeight;
+	uint32_t SurfaceFormat;
 };
 
 ceeGraphicsState* ceeGraphicsMallocState() {
@@ -77,18 +106,19 @@ void ceeGraphicsFreeState(ceeGraphicsState* state) {
 }
 
 void ceeGraphicsInitialize(ceeGraphicsState* state) {
+	/*
 	static EGL_DISPMANX_WINDOW_T nativeWindow;
 
 	DISPMANX_UPDATE_HANDLE_T dispmanUpdate;
 	VC_RECT_T srcRect;
 	VC_RECT_T dstRect;
+	*/
 
 	EGLint const configAttribs[] = {
-		EGL_RED_SIZE, 8,
-		EGL_GREEN_SIZE, 8,
-		EGL_BLUE_SIZE, 8,
-		EGL_ALPHA_SIZE, 8,
-		EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
+		EGL_RED_SIZE, 1,
+		EGL_GREEN_SIZE, 1,
+		EGL_BLUE_SIZE, 1,
+		EGL_ALPHA_SIZE, 0,
 		EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
 		EGL_NONE
 	};
@@ -106,9 +136,115 @@ void ceeGraphicsInitialize(ceeGraphicsState* state) {
 
 	memset(state, 0, sizeof(struct _ceeGraphicsState));
 
-	bcm_host_init();
+	state->DrmFd = open("/dev/dri/card0", O_RDWR);
+	if (state->DrmFd < 0) {
+		printf("Failed to open DRM device.\n");
+		exit(EXIT_FAILURE);
+	}
 
-	state->display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+	drmModeRes* resources = drmModeGetResources(state->DrmFd);
+	if (resources == NULL) {
+		printf("Failed to get DRM resources: %s\n", strerror(errno));
+		close(state->DrmFd);
+		exit(EXIT_FAILURE);
+	}
+
+	drmModeConnector* connector = NULL;
+	for (uint32_t i = 0; i < resources->count_connectors; i++) {
+		connector = drmModeGetConnector(state->DrmFd, resources->connectors[i]);
+		if (connector->connection == DRM_MODE_CONNECTED) {
+			break;
+		}
+		drmModeFreeConnector(connector);
+		connector = NULL;
+	}
+	if (connector == NULL) {
+		printf("Failed to find conected connector.\n");
+		drmModeFreeResources(resources);
+		close(state->DrmFd);
+		exit(EXIT_FAILURE);
+	}
+
+	size_t area = 0;
+	for (uint32_t i = 0; i < connector->count_modes; i++) {
+		drmModeModeInfo* currentMode = &connector->modes[i];
+
+		if (currentMode->type == DRM_MODE_TYPE_PREFERRED) {
+			state->DrmMode = currentMode;
+		}
+
+		size_t currentArea = currentMode->hdisplay * currentMode->vdisplay;
+		if (currentArea > area) {
+			state->DrmMode = currentMode;
+			area = currentArea;
+		}
+	}
+
+	if (state->DrmMode == NULL) {
+		printf("Failed to find valid connector mode.\n");
+		drmModeFreeConnector(connector);
+		drmModeFreeResources(resources);
+		close(state->DrmFd);
+		exit(EXIT_FAILURE);
+	}
+
+	drmModeEncoder* encoder = NULL;
+	for (uint32_t i = 0; i < resources->count_encoders; i++) {
+		encoder = drmModeGetEncoder(state->DrmFd, resources->encoders[i]);
+		if (encoder->encoder_id == connector->encoder_id) {
+			break;
+		}
+		drmModeFreeEncoder(encoder);
+		encoder = NULL;
+	}
+
+	if (encoder == NULL) {
+		uint32_t crtcId = FindCrtcIdForConnector(state, resources, connector);
+		if (crtcId == 0) {
+			printf("No CRTC found.\n");
+			exit(EXIT_FAILURE);
+		}
+		state->DrmCrtcId = crtcId;
+	} else {
+		state->DrmCrtcId = encoder->crtc_id;
+	}
+
+	for (uint32_t i = 0; i < resources->count_crtcs; i++) {
+		if (state->DrmCrtcId == resources->crtcs[i]) {
+			state->DrmCrtcIndex = i;
+			break;
+		}
+	}
+
+	state->DrmConnectorId = connector->connector_id;
+	drmModeFreeConnector(connector);
+	drmModeFreeResources(resources);
+
+	state->GbmDevice = gbm_create_device(state->DrmFd);
+	state->SurfaceFormat = GBM_FORMAT_XRGB8888;
+
+	state->GbmSurface = gbm_surface_create(state->GbmDevice, state->DrmMode->hdisplay, state->DrmMode->vdisplay, state->SurfaceFormat, GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING);
+
+	if (state->GbmSurface == NULL) {
+		printf("Failed to create surface.\n");
+		exit(EXIT_FAILURE);
+	}
+
+	state->SurfaceWidth = state->DrmMode->hdisplay;
+	state->SurfaceHeight = state->DrmMode->vdisplay;
+
+	const char* eglExts, *clientExts, *dpyExts;
+	clientExts = eglQueryString(EGL_NO_DISPLAY, EGL_EXTENSIONS);
+	
+	PFNEGLGETPLATFORMDISPLAYEXTPROC eglGetPlatformDisplayEXT;
+	if (HasExt("EGL_EXT_platform_base", "eglGetPlatformDisplayEXT")) {
+		eglGetPlatformDisplayEXT = (PFNEGLGETPLATFORMDISPLAYEXTPROC)eglGetProcAddress("eglGetPlatformDisplayEXT");
+	}
+	if (eglGetPlatformDisplayEXT) {
+		eglGetPlatformDisplayEXT(EGL_PLATFORM_GBM_KHR, state->GbmDevice, NULL);
+	} else {
+		state->display = eglGetDisplay((void*)state->GbmDevice);
+	}
 	assert(state->display != EGL_NO_DISPLAY);
 
 	result = eglInitialize(state->display, NULL, NULL);
@@ -120,9 +256,7 @@ void ceeGraphicsInitialize(ceeGraphicsState* state) {
 	state->context = eglCreateContext(state->display, config, EGL_NO_CONTEXT, contextAttribs);
 	assert(state->context != EGL_NO_CONTEXT);
 
-	success = graphics_get_display_size(0, &state->screenWidth, &state->screenHeight);
-	assert(success >= 0);
-
+	/*
 	dstRect.x = 0;
 	dstRect.y = 0;
 	dstRect.width = state->screenWidth;
@@ -133,26 +267,30 @@ void ceeGraphicsInitialize(ceeGraphicsState* state) {
 	srcRect.width = state->screenWidth << 16;
 	srcRect.height = state->screenHeight << 16;
 
-	state->dispmanDisplay = vc_dispmanx_display_open(0 /* LCD */);
+	state->dispmanDisplay = vc_dispmanx_display_open(0);
 	dispmanUpdate = vc_dispmanx_update_start(0);
 	state->dispmanElement = vc_dispmanx_element_add(
 			dispmanUpdate,
 			state->dispmanDisplay,
-			0, /* layer */
+			0,
 			&dstRect,
-			0, /* src */
+			0,
 			&srcRect,
 			DISPMANX_PROTECTION_NONE,
-			0, /* alpha */
-			0, /* clamp */
-			(DISPMANX_TRANSFORM_T)0 /* tramsform */);
+			0,
+			0,
+			(DISPMANX_TRANSFORM_T)0);
 
 	nativeWindow.element = state->dispmanElement;
 	nativeWindow.width = state->screenWidth;
 	nativeWindow.height = state->screenHeight;
 	vc_dispmanx_update_submit_sync(dispmanUpdate);
+	*/
 
-	state->surface = eglCreateWindowSurface(state->display, config, &nativeWindow, NULL);
+	state->screenWidth = state->SurfaceWidth;
+	state->screenHeight = state->SurfaceHeight;
+
+	state->surface = eglCreateWindowSurface(state->display, config, (EGLNativeWindowType)state->GbmSurface, NULL);
 	assert(state->surface != EGL_NO_SURFACE);
 
 	result = eglMakeCurrent(state->display, state->surface, state->surface, state->context);
@@ -357,5 +495,53 @@ void ceeGraphicsEndFrame(ceeGraphicsState* state) {
 
 void ceeGraphicsClearColor(float r, float g, float b, float a) {
 	glClearColor(r, g, b, a);
+}
+
+static uint32_t FindCrtcIdForEncoder(const drmModeRes* resources, const drmModeEncoder* encoder) {
+	for (uint32_t i = 0; i < resources->count_crtcs; i++) {
+		const uint32_t crtcMask = i << i;
+		const uint32_t crtcId = resources->crtcs[i];
+		if (encoder->possible_crtcs & crtcMask) {
+			return crtcId;
+		}
+	}
+
+	return 0;
+}
+
+static uint32_t FindCrtcIdForConnector(const ceeGraphicsState* state, const drmModeRes* resources, const drmModeConnector* connector) {
+	for (uint32_t i = 0; i < connector->count_encoders; i++) {
+		const uint32_t encoderId = connector->encoders[i];
+		drmModeEncoder* encoder = drmModeGetEncoder(state->DrmFd, encoderId);
+
+		if (encoder != NULL) {
+			const uint32_t crtcId = FindCrtcIdForEncoder(resources, encoder);
+
+			drmModeFreeEncoder(encoder);
+			if (crtcId != 0) {
+				return crtcId;
+			}
+		}
+	}
+	return 0;
+}
+
+static bool HasExt(const char *extensionList, const char *ext) {
+	const char *ptr = extensionList;
+	int len = strlen(ext);
+
+	if (ptr == NULL || *ptr == '\0')
+		return false;
+
+	while (true) {
+		ptr = strstr(ptr, ext);
+		if (!ptr)
+			return false;
+
+		if (ptr[len] == ' ' || ptr[len] == '\0')
+			return true;
+
+		ptr += len;
+	}
 }
 
