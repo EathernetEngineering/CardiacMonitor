@@ -15,7 +15,7 @@
 #include "common.h"
 #include "graph.h"
 #include "graphics.h"
-#include "serial.h"
+#include "serial.hh"
 #include "util.h"
 
 #define ECG_DATA_POINTS          6000
