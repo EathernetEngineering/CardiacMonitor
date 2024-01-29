@@ -27,9 +27,11 @@
 
 static EGLint ceeGraphicsCompileShader(GLenum type, const char source[], GLuint* shader);
 static void ceeGraphicsSwapBuffers(ceeGraphicsState* state);
+static int32_t FindDrmDevice(drmModeRes** resources);
 static uint32_t FindCrtcIdForEncoder(const drmModeRes* resources, const drmModeEncoder* encoder);
 static uint32_t FindCrtcIdForConnector(const ceeGraphicsState* state, const drmModeRes* resources, const drmModeConnector* connector);
 static bool HasExt(const char *extensionList, const char *ext);
+static int32_t GetDrmFbFromBo(struct gbm_bo* bo, struct gbm_bo** fb, uint32_t* fb_id);
 
 static GLuint getComponentCount(int type) {
 	switch (type) {
@@ -75,26 +77,26 @@ struct _ceeGraphicsState {
 	GLuint screenWidth;
 	GLuint screenHeight;
 
-	EGLNativeWindowType hWnd;
-
 	EGLDisplay display;
 	EGLContext context;
 	EGLSurface surface;
 
-	DISPMANX_DISPLAY_HANDLE_T dispmanDisplay;
-	DISPMANX_ELEMENT_HANDLE_T dispmanElement;
-
 	int32_t DrmFd;
+	drmModeRes* DrmResources;
 	struct DrmConnector DrmConnector;
 	uint32_t DrmConnectorId;
 	int32_t DrmCrtcId;
 	uint32_t DrmCrtcIndex;
-	drmModeModeInfo* DrmMode;
+	drmModeModeInfo DrmMode;
 
 	struct gbm_device* GbmDevice;
 	struct gbm_surface* GbmSurface;
 	uint32_t SurfaceWidth, SurfaceHeight;
 	uint32_t SurfaceFormat;
+
+	struct gbm_bo* GbmBo;
+	struct gbm_bo* DrmFb;
+	uint32_t DrmFbId;
 };
 
 ceeGraphicsState* ceeGraphicsMallocState() {
@@ -106,14 +108,6 @@ void ceeGraphicsFreeState(ceeGraphicsState* state) {
 }
 
 void ceeGraphicsInitialize(ceeGraphicsState* state) {
-	/*
-	static EGL_DISPMANX_WINDOW_T nativeWindow;
-
-	DISPMANX_UPDATE_HANDLE_T dispmanUpdate;
-	VC_RECT_T srcRect;
-	VC_RECT_T dstRect;
-	*/
-
 	EGLint const configAttribs[] = {
 		EGL_RED_SIZE, 1,
 		EGL_GREEN_SIZE, 1,
@@ -136,16 +130,10 @@ void ceeGraphicsInitialize(ceeGraphicsState* state) {
 
 	memset(state, 0, sizeof(struct _ceeGraphicsState));
 
-	state->DrmFd = open("/dev/dri/card0", O_RDWR);
+	drmModeRes* resources = drmModeGetResources(state->DrmFd);
+	state->DrmFd = FindDrmDevice(&resources);
 	if (state->DrmFd < 0) {
 		printf("Failed to open DRM device.\n");
-		exit(EXIT_FAILURE);
-	}
-
-	drmModeRes* resources = drmModeGetResources(state->DrmFd);
-	if (resources == NULL) {
-		printf("Failed to get DRM resources: %s\n", strerror(errno));
-		close(state->DrmFd);
 		exit(EXIT_FAILURE);
 	}
 
@@ -153,6 +141,7 @@ void ceeGraphicsInitialize(ceeGraphicsState* state) {
 	for (uint32_t i = 0; i < resources->count_connectors; i++) {
 		connector = drmModeGetConnector(state->DrmFd, resources->connectors[i]);
 		if (connector->connection == DRM_MODE_CONNECTED) {
+			printf("Using display: 0x%X\n", connector->connector_id);
 			break;
 		}
 		drmModeFreeConnector(connector);
@@ -165,28 +154,40 @@ void ceeGraphicsInitialize(ceeGraphicsState* state) {
 		exit(EXIT_FAILURE);
 	}
 
+	if (connector == NULL) {
+		printf("Failed to find conected connector.\n");
+		drmModeFreeResources(resources);
+		close(state->DrmFd);
+		exit(EXIT_FAILURE);
+	}
+
 	size_t area = 0;
+	drmModeModeInfo* selectedMode = NULL;
 	for (uint32_t i = 0; i < connector->count_modes; i++) {
 		drmModeModeInfo* currentMode = &connector->modes[i];
 
 		if (currentMode->type == DRM_MODE_TYPE_PREFERRED) {
-			state->DrmMode = currentMode;
+			selectedMode = currentMode;
 		}
 
 		size_t currentArea = currentMode->hdisplay * currentMode->vdisplay;
 		if (currentArea > area) {
-			state->DrmMode = currentMode;
+			selectedMode = currentMode;
 			area = currentArea;
 		}
 	}
 
-	if (state->DrmMode == NULL) {
+	if (selectedMode == NULL) {
 		printf("Failed to find valid connector mode.\n");
 		drmModeFreeConnector(connector);
 		drmModeFreeResources(resources);
 		close(state->DrmFd);
 		exit(EXIT_FAILURE);
 	}
+	state->DrmMode = *selectedMode;
+
+	printf("Selected display mode %ux%u\n", state->DrmMode.hdisplay, state->DrmMode.vdisplay);
+	fflush(stdout);
 
 	drmModeEncoder* encoder = NULL;
 	for (uint32_t i = 0; i < resources->count_encoders; i++) {
@@ -217,26 +218,26 @@ void ceeGraphicsInitialize(ceeGraphicsState* state) {
 	}
 
 	state->DrmConnectorId = connector->connector_id;
-	drmModeFreeConnector(connector);
-	drmModeFreeResources(resources);
+	state->DrmConnector.connector = connector;
+	state->DrmResources = resources;
 
 	state->GbmDevice = gbm_create_device(state->DrmFd);
 	state->SurfaceFormat = GBM_FORMAT_XRGB8888;
 
-	state->GbmSurface = gbm_surface_create(state->GbmDevice, state->DrmMode->hdisplay, state->DrmMode->vdisplay, state->SurfaceFormat, GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING);
+	state->GbmSurface = gbm_surface_create(state->GbmDevice, state->DrmMode.hdisplay, state->DrmMode.vdisplay, state->SurfaceFormat, GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING);
 
 	if (state->GbmSurface == NULL) {
 		printf("Failed to create surface.\n");
 		exit(EXIT_FAILURE);
 	}
 
-	state->SurfaceWidth = state->DrmMode->hdisplay;
-	state->SurfaceHeight = state->DrmMode->vdisplay;
+	state->SurfaceWidth = state->DrmMode.hdisplay;
+	state->SurfaceHeight = state->DrmMode.vdisplay;
 
 	const char* eglExts, *clientExts, *dpyExts;
 	clientExts = eglQueryString(EGL_NO_DISPLAY, EGL_EXTENSIONS);
 	
-	PFNEGLGETPLATFORMDISPLAYEXTPROC eglGetPlatformDisplayEXT;
+	PFNEGLGETPLATFORMDISPLAYEXTPROC eglGetPlatformDisplayEXT = NULL;
 	if (HasExt("EGL_EXT_platform_base", "eglGetPlatformDisplayEXT")) {
 		eglGetPlatformDisplayEXT = (PFNEGLGETPLATFORMDISPLAYEXTPROC)eglGetProcAddress("eglGetPlatformDisplayEXT");
 	}
@@ -250,72 +251,55 @@ void ceeGraphicsInitialize(ceeGraphicsState* state) {
 	result = eglInitialize(state->display, NULL, NULL);
 	assert(result != EGL_FALSE);
 
+	printf("EGL Information:\n");
+	printf("\tVERSION: \"%s\".\n", eglQueryString(state->display, EGL_VERSION));
+	printf("\tVENDOR:  \"%s\".\n", eglQueryString(state->display, EGL_VENDOR));
+	printf("\tDISPLAY: \"%p\".\n", state->display);
+	fflush(stdout);
+
+	result = eglBindAPI(EGL_OPENGL_ES_API);
+	if (result == EGL_FALSE) {
+		printf("Failed to bind api EGL_OPENGL_ES_API.\n");
+	}
+
 	result = eglChooseConfig(state->display, configAttribs, &config, 1, &numConfigs);
-	assert(result != EGL_FALSE);
+	if (result == EGL_FALSE) {
+		printf("Failed to choose EGL config.\n");
+	}
 
 	state->context = eglCreateContext(state->display, config, EGL_NO_CONTEXT, contextAttribs);
-	assert(state->context != EGL_NO_CONTEXT);
-
-	/*
-	dstRect.x = 0;
-	dstRect.y = 0;
-	dstRect.width = state->screenWidth;
-	dstRect.height = state->screenHeight;
-	
-	srcRect.x = 0;
-	srcRect.y = 0;
-	srcRect.width = state->screenWidth << 16;
-	srcRect.height = state->screenHeight << 16;
-
-	state->dispmanDisplay = vc_dispmanx_display_open(0);
-	dispmanUpdate = vc_dispmanx_update_start(0);
-	state->dispmanElement = vc_dispmanx_element_add(
-			dispmanUpdate,
-			state->dispmanDisplay,
-			0,
-			&dstRect,
-			0,
-			&srcRect,
-			DISPMANX_PROTECTION_NONE,
-			0,
-			0,
-			(DISPMANX_TRANSFORM_T)0);
-
-	nativeWindow.element = state->dispmanElement;
-	nativeWindow.width = state->screenWidth;
-	nativeWindow.height = state->screenHeight;
-	vc_dispmanx_update_submit_sync(dispmanUpdate);
-	*/
+	if (state->context == EGL_NO_CONTEXT) {
+		printf("Failed to create EGL context.\n");
+	}
 
 	state->screenWidth = state->SurfaceWidth;
 	state->screenHeight = state->SurfaceHeight;
 
 	state->surface = eglCreateWindowSurface(state->display, config, (EGLNativeWindowType)state->GbmSurface, NULL);
-	assert(state->surface != EGL_NO_SURFACE);
+	if (state->surface == EGL_NO_SURFACE) {
+		printf("Failed to create window surface.\n");
+	}
 
 	result = eglMakeCurrent(state->display, state->surface, state->surface, state->context);
-	assert(result != EGL_FALSE);
+	if (result == EGL_FALSE) {
+		printf("Failed to make EGL context current.\n");
+	}
 
 	glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
+	glClear(GL_COLOR_BUFFER_BIT);
 
-	fprintf(stderr, "\e[0;32mGL Version: %s\e[0m\n", glGetString(GL_VERSION));
+	eglSwapBuffers(state->display, state->surface);
+	state->GbmBo = gbm_surface_lock_front_buffer(state->GbmSurface);
+	result = GetDrmFbFromBo(state->GbmBo, &state->DrmFb, &state->DrmFbId);
+
+	result = drmModeSetCrtc(state->DrmFd, state->DrmCrtcId, state->DrmFbId, 0, 0, &state->DrmConnectorId, 1, &state->DrmMode);
 }
 
 void ceeGraphicsShutdown(ceeGraphicsState* state) {
-	DISPMANX_UPDATE_HANDLE_T dispmanUpdate;
-	int result;
-
 	glClear(GL_COLOR_BUFFER_BIT);
 	eglSwapBuffers(state->display, state->surface);
 
 	eglDestroySurface(state->display, state->surface);
-
-	dispmanUpdate = vc_dispmanx_update_start(0);
-	result = vc_dispmanx_element_remove(dispmanUpdate, state->dispmanElement);
-	assert(result == 0);
-	vc_dispmanx_update_submit_sync(dispmanUpdate);
-	result = vc_dispmanx_display_close(state->dispmanDisplay);
-	assert(result == 0);
 
 	eglMakeCurrent(state->display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
 	eglDestroyContext(state->display, state->context);
@@ -497,6 +481,39 @@ void ceeGraphicsClearColor(float r, float g, float b, float a) {
 	glClearColor(r, g, b, a);
 }
 
+#define MAX_DRM_DEVICES 64
+
+static int32_t FindDrmDevice(drmModeRes** resources) {
+	drmDevicePtr devices[MAX_DRM_DEVICES] = { NULL };
+	int32_t deviceCount, fd = -1;
+
+	deviceCount = drmGetDevices2(0, devices, MAX_DRM_DEVICES);
+	if (deviceCount < 0) {
+		printf("Failed to find any DRM devices: %s\n", strerror(-deviceCount));
+		return -1;
+	}
+
+	for (uint32_t i = 0; i < deviceCount; i++) {
+		drmDevicePtr currentDevice = devices[i];
+
+		if (!(currentDevice->available_nodes & (1 << DRM_NODE_PRIMARY))) {
+			continue;
+		}
+		fd = open(currentDevice->nodes[DRM_NODE_PRIMARY], O_RDWR);
+		if (fd < 0) {
+			continue;
+		}
+		*resources = drmModeGetResources(fd);
+		if (*resources != NULL) {
+			break;
+		}
+		close(fd);
+		fd = -1;
+	}
+	drmFreeDevices(devices, deviceCount);
+	return fd;
+}
+
 static uint32_t FindCrtcIdForEncoder(const drmModeRes* resources, const drmModeEncoder* encoder) {
 	for (uint32_t i = 0; i < resources->count_crtcs; i++) {
 		const uint32_t crtcMask = i << i;
@@ -543,5 +560,35 @@ static bool HasExt(const char *extensionList, const char *ext) {
 
 		ptr += len;
 	}
+}
+
+static void DestroyGbmUserDataCallback(struct gbm_bo* bo, void* userData) {
+	(void)bo; // Supress unused parameter warning.
+	free(userData);
+}
+
+static int32_t GetDrmFbFromBo(struct gbm_bo* bo, struct gbm_bo** fb, uint32_t* fb_id) {
+	int drmFd = gbm_device_get_fd(gbm_bo_get_device(bo));
+	struct drmFbInfo {
+		struct gbm_bo* bo;
+		uint32_t id;
+	} *fbInfo;
+	fbInfo = gbm_bo_get_user_data(bo);
+
+	if (fbInfo) {
+		*fb = fbInfo->bo;
+		*fb_id = fbInfo->id;
+		return 0;
+	}
+
+	fbInfo = calloc(1, sizeof(*fbInfo));
+	*fb = bo;
+	*fb_id = 0;
+
+	uint32_t width = gbm_bo_get_width(bo);
+	uint32_t height = gbm_bo_get_height(bo);
+	uint32_t format = gbm_bo_get_format(bo);
+
+	gbm_bo_set_user_data(bo, fbInfo, DestroyGbmUserDataCallback);
 }
 
