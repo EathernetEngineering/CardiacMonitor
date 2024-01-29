@@ -12,6 +12,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <sys/time.h>
 
 #include <bcm_host.h>
 
@@ -25,6 +26,24 @@
 
 #include <gbm.h>
 
+#define WEAK __attribute__((weak))
+#define NSEC_PER_SEC 1000000000
+
+WEAK union gbm_bo_handle
+gbm_bo_get_handle_for_plane(struct gbm_bo *bo, int plane);
+
+WEAK uint64_t
+gbm_bo_get_modifier(struct gbm_bo *bo);
+
+WEAK int
+gbm_bo_get_plane_count(struct gbm_bo *bo);
+
+WEAK uint32_t
+gbm_bo_get_stride_for_plane(struct gbm_bo *bo, int plane);
+
+WEAK uint32_t
+gbm_bo_get_offset(struct gbm_bo *bo, int plane);
+
 static EGLint ceeGraphicsCompileShader(GLenum type, const char source[], GLuint* shader);
 static void ceeGraphicsSwapBuffers(ceeGraphicsState* state);
 static int32_t FindDrmDevice(drmModeRes** resources);
@@ -32,6 +51,7 @@ static uint32_t FindCrtcIdForEncoder(const drmModeRes* resources, const drmModeE
 static uint32_t FindCrtcIdForConnector(const ceeGraphicsState* state, const drmModeRes* resources, const drmModeConnector* connector);
 static bool HasExt(const char *extensionList, const char *ext);
 static int32_t GetDrmFbFromBo(struct gbm_bo* bo, struct gbm_bo** fb, uint32_t* fb_id);
+static void PageFlipHandler(int32_t fd, uint32_t frame, uint32_t sec, uint32_t usec, void* data);
 
 static GLuint getComponentCount(int type) {
 	switch (type) {
@@ -97,6 +117,11 @@ struct _ceeGraphicsState {
 	struct gbm_bo* GbmBo;
 	struct gbm_bo* DrmFb;
 	uint32_t DrmFbId;
+
+	fd_set fds;
+	drmEventContext DrmEventContext;
+
+	size_t FrameIndex;
 };
 
 ceeGraphicsState* ceeGraphicsMallocState() {
@@ -293,6 +318,9 @@ void ceeGraphicsInitialize(ceeGraphicsState* state) {
 	result = GetDrmFbFromBo(state->GbmBo, &state->DrmFb, &state->DrmFbId);
 
 	result = drmModeSetCrtc(state->DrmFd, state->DrmCrtcId, state->DrmFbId, 0, 0, &state->DrmConnectorId, 1, &state->DrmMode);
+
+	state->DrmEventContext.page_flip_handler = PageFlipHandler;
+	state->DrmEventContext.version = 2;
 }
 
 void ceeGraphicsShutdown(ceeGraphicsState* state) {
@@ -473,8 +501,47 @@ void ceeGraphicsFlushLines(uint32_t indicesCount) {
 	glDrawElements(GL_LINES, indicesCount, GL_UNSIGNED_SHORT, (void*)0);
 }
 
+void ceeGraphicsFlushLineStrip(uint32_t indicesCount) {
+	glDrawElements(GL_LINE_STRIP, indicesCount, GL_UNSIGNED_SHORT, (void*)0);
+}
+
 void ceeGraphicsEndFrame(ceeGraphicsState* state) {
-	ceeGraphicsSwapBuffers(state);
+	int32_t waitingForFlip = 1;
+	eglSwapBuffers(state->display, state->surface);
+	struct gbm_bo* nextBo = gbm_surface_lock_front_buffer(state->GbmSurface);
+	if (GetDrmFbFromBo(nextBo, &state->DrmFb, &state->DrmFbId) != 0) {
+		printf("GetDrmFbFromBo failed.\n");
+	}
+
+	int32_t result = drmModePageFlip(state->DrmFd, state->DrmCrtcId, state->DrmFbId, DRM_MODE_PAGE_FLIP_EVENT, &waitingForFlip);
+	if (result) {
+		printf("Failed to queue page flip: \"%s\"\n", strerror(-result));
+		return;
+	}
+
+	while (waitingForFlip) {
+		FD_ZERO(&state->fds);
+		FD_SET(0, &state->fds);
+		FD_SET(state->DrmFd, &state->fds);
+
+		result = select(state->DrmFd + 1, &state->fds, NULL, NULL, NULL);
+		if (result < 0) {
+			printf("Select erorr: \"%s\"\n", strerror(errno));
+			return;
+		} else if (result == 0) {
+			printf("Select timeout.\n");
+			return;
+		} else if (FD_ISSET(0, &state->fds)) {
+			printf("User interrupted.\n");
+			return;
+		}
+		drmHandleEvent(state->DrmFd, &state->DrmEventContext);
+	}
+
+	gbm_surface_release_buffer(state->GbmSurface, state->GbmBo);
+	state->GbmBo = nextBo;
+
+	state->FrameIndex++;
 }
 
 void ceeGraphicsClearColor(float r, float g, float b, float a) {
@@ -505,6 +572,7 @@ static int32_t FindDrmDevice(drmModeRes** resources) {
 		}
 		*resources = drmModeGetResources(fd);
 		if (*resources != NULL) {
+			printf("Using DRM device \"%s\".\n", currentDevice->nodes[DRM_NODE_PRIMARY]);
 			break;
 		}
 		close(fd);
@@ -563,11 +631,11 @@ static bool HasExt(const char *extensionList, const char *ext) {
 }
 
 static void DestroyGbmUserDataCallback(struct gbm_bo* bo, void* userData) {
-	(void)bo; // Supress unused parameter warning.
+	(void)bo; // Supress compiler unused parameter warning.
 	free(userData);
 }
 
-static int32_t GetDrmFbFromBo(struct gbm_bo* bo, struct gbm_bo** fb, uint32_t* fb_id) {
+static int32_t GetDrmFbFromBo(struct gbm_bo* bo, struct gbm_bo** fb, uint32_t* fbId) {
 	int drmFd = gbm_device_get_fd(gbm_bo_get_device(bo));
 	struct drmFbInfo {
 		struct gbm_bo* bo;
@@ -577,18 +645,72 @@ static int32_t GetDrmFbFromBo(struct gbm_bo* bo, struct gbm_bo** fb, uint32_t* f
 
 	if (fbInfo) {
 		*fb = fbInfo->bo;
-		*fb_id = fbInfo->id;
+		*fbId = fbInfo->id;
 		return 0;
 	}
 
 	fbInfo = calloc(1, sizeof(*fbInfo));
 	*fb = bo;
-	*fb_id = 0;
+	*fbId = 0;
 
 	uint32_t width = gbm_bo_get_width(bo);
 	uint32_t height = gbm_bo_get_height(bo);
 	uint32_t format = gbm_bo_get_format(bo);
+	uint32_t strides[4] = { 0 };
+	uint32_t offsets[4] = { 0 };
+	uint32_t handles[4] = { 0 };
+	uint32_t flags = 0;
+	int32_t result = -1;
+
+	if (gbm_bo_get_handle_for_plane && gbm_bo_get_modifier &&
+		gbm_bo_get_plane_count && gbm_bo_get_stride_for_plane &&
+		gbm_bo_get_offset) {
+		uint64_t modifiers[4] = {0};
+		modifiers[0] = gbm_bo_get_modifier(bo);
+		const int planeCount = gbm_bo_get_plane_count(bo);
+		for (uint32_t i = 0; i < planeCount; i++) {
+			handles[i] = gbm_bo_get_handle_for_plane(bo, i).u32;
+			strides[i] = gbm_bo_get_stride_for_plane(bo, i);
+			offsets[i] = gbm_bo_get_offset(bo, i);
+			modifiers[i] = modifiers[0];
+		}
+
+		if (modifiers[0] && (modifiers[0] != DRM_FORMAT_MOD_INVALID)) {
+			flags = DRM_MODE_FB_MODIFIERS;
+			printf("Using modifier %" PRIx64 "\n", modifiers[0]);
+		}
+
+		result = drmModeAddFB2WithModifiers(drmFd, width, height, format, handles, strides, offsets, modifiers, fbId, 0);
+	}
+
+	if (result) {
+		if (flags) {
+			printf("Modifiers failed.\n");
+		}
+		memcpy(handles, (uint32_t[4]){gbm_bo_get_handle(bo).u32, 0, 0, 0}, sizeof(uint32_t)*4);
+		memcpy(strides, (uint32_t[4]){gbm_bo_get_stride(bo), 0, 0, 0}, sizeof(uint32_t)*4);
+		memset(offsets, 0, sizeof(uint32_t)*4);
+
+		result = drmModeAddFB2(drmFd, width, height, format, handles, strides, offsets, fbId, 0);
+	}
+
+	if (result) {
+		printf("Failed to create fb %s\n", strerror(errno));
+		free(fbInfo);
+		return -1;
+	}
+	fbInfo->bo = *fb;
+	fbInfo->id = *fbId;
 
 	gbm_bo_set_user_data(bo, fbInfo, DestroyGbmUserDataCallback);
+
+	return 0;
+}
+
+static void PageFlipHandler(int32_t fd, uint32_t frame, uint32_t sec, uint32_t usec, void* data) {
+	(void)fd, (void)frame, (void)sec, (void)usec; // surpress compiler unuesed parameter warning.
+
+	int32_t* waitingForFlip = (int32_t*)data;
+	*waitingForFlip = 0;
 }
 
