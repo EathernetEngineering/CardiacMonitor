@@ -11,49 +11,34 @@
 #include <signal.h>
 
 float* createGraphBuffer(
-		int32_t* data,
+		float* data,
 		size_t length,
-		uint32_t screenWidth,
-		int32_t yMidpoint,
+		float yAlignment,
 		float yScaling,
-		uint8_t normalize,
+		float xAlignment,
+		float xScaling,
 		float r,
 		float g,
 		float b,
 		float a,
 		float buffer[])
 {
-	size_t elements = length/sizeof(data[0]);
-	if (buffer == NULL) {
+	const size_t elements = length/sizeof(data[0]);
+	if (data == NULL) {
 		raise(SIGABRT);
 	}
 
-	if (screenWidth >= elements) {
-		float ratio = ((float)screenWidth)/((float)elements);
-		for (int32_t i = 0; i < elements; i += 8) {
-			buffer[i + 0] = ((float)i * ratio/((float)screenWidth/2.0f)) - 1.0f;
-			buffer[i + 1] = (float)data[i] * yScaling + yMidpoint;
-			buffer[i + 2] = 0.0f;
-			buffer[i + 3] = 1.0f;
-			buffer[i + 4] = r;
-			buffer[i + 5] = g;
-			buffer[i + 6] = b;
-			buffer[i + 7] = a;
-		}
-	} else {
-		float ratio = ((float)elements)/((float)screenWidth);
-		int32_t vertex = 0;
-		for (int32_t i = 0; i < screenWidth * 8; i += 8) {
-			buffer[i + 0] = (2.0f * (float)vertex / (float)screenWidth) - 1.0f;
-			buffer[i + 1] = (float)data[(int32_t)(vertex * ratio)] * yScaling + yMidpoint;
-			buffer[i + 2] = 0.0f;
-			buffer[i + 3] = 1.0f;
-			buffer[i + 4] = r;
-			buffer[i + 5] = g;
-			buffer[i + 6] = b;
-			buffer[i + 7] = a;
-			vertex++;
-		}
+	uint32_t vtxIndex = 0;
+	for (uint32_t i = 0; i < elements; i++) {
+		buffer[vtxIndex + 0] = (((float)i / (float)elements) * 2.0f - 1.0f) * xScaling + xAlignment;
+		buffer[vtxIndex + 1] = data[i] * yScaling + yAlignment;
+		buffer[vtxIndex + 2] = 0.0f;
+		buffer[vtxIndex + 3] = 1.0f;
+		buffer[vtxIndex + 4] = r;
+		buffer[vtxIndex + 5] = g;
+		buffer[vtxIndex + 6] = b;
+		buffer[vtxIndex + 7] = a;
+		vtxIndex += 8;
 	}
 
 	return buffer;

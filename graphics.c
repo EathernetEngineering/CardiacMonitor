@@ -501,8 +501,8 @@ void ceeGraphicsFlushLines(uint32_t indicesCount) {
 	glDrawElements(GL_LINES, indicesCount, GL_UNSIGNED_SHORT, (void*)0);
 }
 
-void ceeGraphicsFlushLineStrip(uint32_t indicesCount) {
-	glDrawElements(GL_LINE_STRIP, indicesCount, GL_UNSIGNED_SHORT, (void*)0);
+void ceeGraphicsFlushLineStrip(uint32_t vertexCount, uint32_t firstVertex) {
+	glDrawArrays(GL_LINE_STRIP, firstVertex, vertexCount);
 }
 
 void ceeGraphicsEndFrame(ceeGraphicsState* state) {

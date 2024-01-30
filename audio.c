@@ -1,5 +1,6 @@
 #include "audio.h"
 
+#include <stdarg.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,9 +15,13 @@
 #include <unistd.h>
 
 #include <alsa/asoundlib.h>
+#include <alsa/pcm.h>
+#include <alsa/error.h>
 
 #include "audioFormat.h"
 #include "util.h"
+
+static void XRun(snd_pcm_t* handle, int32_t monotonic);
 
 struct _ceeAudioState {
 	snd_pcm_t* handle;
@@ -25,6 +30,7 @@ struct _ceeAudioState {
 
 	snd_pcm_hw_params_t* hwParams;
 	snd_pcm_sw_params_t* swParams;
+	int monotonic;
 
 	snd_pcm_uframes_t bufferSize;
 	snd_pcm_uframes_t chunkSize;
@@ -179,6 +185,8 @@ void ceeAudioOpenWav(ceeAudioState* state, const char* filename) {
 	snd_pcm_hw_params_get_buffer_size(state->hwParams, &state->bufferSize);
 	state->frameSize = fmt.bytePerSample;
 
+	state->monotonic = snd_pcm_hw_params_is_monotonic(state->hwParams);
+
 	// Do audio buffer read.
 	result = read(fd, &chunkHeader, sizeof(WaveChunkHeader));
 	assert(result == sizeof(WaveChunkHeader));
@@ -200,32 +208,72 @@ void ceeAudioPlay(ceeAudioState* state) {
 	int32_t i = 0;
 	int32_t result;
 	const uint32_t chunkBytes = state->chunkSize * state->frameSize;
-	for (; i < state->audioBufferSize; i += chunkBytes) {
-		if (state->audioBufferSize - i < state->chunkSize) {
+	while (i < state->audioBufferSize) {
+		if (state->audioBufferSize - i < chunkBytes) {
 			result = snd_pcm_writei(state->handle, state->audioBuffer + i, (state->audioBufferSize - i) / state->frameSize);
 			if (result < 0) {
-				if (result == EPIPE) {
-					// TODO XRUN
-					fprintf(stderr, "XRUN!\n");
-					snd_pcm_prepare(state->handle);
+				if (result == -EPIPE) {
+					XRun(state->handle, state->monotonic);
 				}
-				else assert(0);
+				else {
+					printf("Failed to write to pcm: %s (%i)\n", snd_strerror(result), result);
+					fflush(stdout);
+					assert(0);
+				}
 			}
 			break;
 		}
 		result = snd_pcm_writei(state->handle, state->audioBuffer + i, state->chunkSize);
 		if (result < 0) {
 			if (result == -EPIPE) {
-				// TODO XRUN
-				fprintf(stderr, "XRUN!\n");
-				snd_pcm_prepare(state->handle);
+				XRun(state->handle, state->monotonic);
 			}
-			else assert(0);
+			else {
+				printf("Failed to write to pcm: %s (%i)\n", snd_strerror(result), result);
+				fflush(stdout);
+				assert(0);
+			}
 		}
+		if (result > 0) {
+			i += result * state->frameSize;
+		}
+	}
+	snd_pcm_drain(state->handle);
+	snd_pcm_prepare(state->handle);
+}
 
-		snd_pcm_drain(state->handle);
-		snd_pcm_prepare(state->handle);
-	};
+static void XRun(snd_pcm_t* handle, int32_t monotonic) {
+	snd_pcm_status_t* status;
+	snd_pcm_status_alloca(&status);
+	int32_t result;
+	if ((result = snd_pcm_status(handle, status)) < 0) {
+		printf("Failed to get status: \"%s\" (%i)", snd_strerror(result), result);
+	}
 
+	if (snd_pcm_status_get_state(status) == SND_PCM_STATE_XRUN) {
+		if (monotonic) {
+			struct timespec now, tstamp, diff;
+			clock_gettime(CLOCK_MONOTONIC, &now);
+			snd_pcm_status_get_trigger_htstamp(status, &tstamp);
+			TimespecSub(&diff, &tstamp, &now);
+
+			printf("Underrun!!! (at least %.3f long)\n", diff.tv_sec * 1000.f + diff.tv_nsec / 1000000.f);
+		} else {
+			struct timeval now, tstamp, diff;
+			gettimeofday(&now, NULL);
+			snd_pcm_status_get_trigger_tstamp(status, &tstamp);
+			TimevalSub(&diff, &tstamp, &now);
+			printf("Underrun!!! (at least %.3f long)\n", diff.tv_sec * 1000.f + diff.tv_usec / 1000.f);
+		}
+		if ((result = snd_pcm_prepare(handle)) < 0) {
+			printf("XRun: prepare error: \"%s\" (%i)", snd_strerror(result), result);
+			fflush(stdout);
+			assert(0);
+		}
+		return;
+	} if (snd_pcm_status_get_state(status) == SND_PCM_STATE_DRAINING) {
+		printf("Draining");
+	}
+	assert(0);
 }
 

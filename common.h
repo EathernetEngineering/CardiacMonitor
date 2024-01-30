@@ -1,5 +1,5 @@
-#ifndef _COMMON_H
-#define _COMMON_H
+#ifndef CEE_COMMON_H_
+#define CEE_COMMON_H_
 
 #define MONITOR_MAGIC_LENGTH 5
 #define MONITOR_MAGIC ".MON"

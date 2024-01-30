@@ -1,5 +1,5 @@
-#ifndef _GRAPHICS_H
-#define _GRAPHICS_H
+#ifndef CEE_GRAPHICS_H_
+#define CEE_GRAPHICS_H_
 
 #include <stdint.h>
 
@@ -89,6 +89,7 @@ void ceeGraphicsDeleteIndexBuffer(uint32_t* buffer);
 void ceeGraphicsStartFrame(ceeGraphicsState* state);
 void ceeGraphicsFlushTriangles(uint32_t indicesCount);
 void ceeGraphicsFlushLines(uint32_t indicesCount);
+void ceeGraphicsFlushLineStrip(uint32_t vertexCount, uint32_t firstVertex);
 void ceeGraphicsEndFrame(ceeGraphicsState* state);
 
 void ceeGraphicsClearColor(float r, float g, float b, float a);

@@ -1,5 +1,5 @@
-#ifndef __FORMAT_HPP
-#define __FORMAT_HPP
+#ifndef CEE_AUDIO_FORMAT_H_
+#define CEE_AUDIO_FORMAT_H_
 
 #include "util.h"
 

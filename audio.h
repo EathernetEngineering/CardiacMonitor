@@ -1,5 +1,5 @@
-#ifndef _AUDIO_H
-#define _AUDIO_H
+#ifndef CEE_AUDIO_H_
+#define CEE_AUDIO_H_
 
 #include <alloca.h>
 

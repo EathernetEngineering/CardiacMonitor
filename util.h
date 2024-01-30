@@ -1,14 +1,12 @@
-#ifndef __UTIL_H
-#define __UTIL_H
+#ifndef CEE_UTIL_H_
+#define CEE_UTIL_H_
 
 #include <endian.h>
 #include <byteswap.h>
+#include <stdint.h>
+#include <stddef.h>
 
-#if defined(__cplusplus)
-#include <cstdio>
-#else
-#include <stdio.h>
-#endif
+#include <sys/time.h>
 
 #if __BYTE_ORDER == __LITTLE_ENDIAN
 #define LE_SHORT(v)              (v)
@@ -24,11 +22,13 @@
 #error "Wrong Endian"
 #endif
 
-#define error(msg) do { \
-	fprintf(stderr, "\e[1;31m[Error from %s:%i]: %s\e[0m\n", __FILE__, __LINE__, msg); \
-	} while (0)
+#define NSEC_PER_SEC 1000000000l
+#define USEC_PER_SEC 1000000l
 
-inline uint8_t checksum(uint8_t* ptr, size_t sz) {
+#if defined(__cplusplus)
+extern "C" {
+#endif
+static inline uint8_t checksum(uint8_t* ptr, size_t sz) {
 	uint8_t chk = 0;
 	while (sz-- != 0){
 		chk -= *ptr++;
@@ -36,5 +36,27 @@ inline uint8_t checksum(uint8_t* ptr, size_t sz) {
 	return chk;
 }
 
+static inline void TimespecSub(struct timespec* diff, struct timespec* start, struct timespec* end) {
+	diff->tv_sec = end->tv_sec - start->tv_sec;
+	diff->tv_nsec = end->tv_nsec - start->tv_nsec;
+
+	if (diff->tv_nsec < 0) {
+		diff->tv_nsec += NSEC_PER_SEC;
+		diff->tv_sec -= 1;
+	}
+}
+
+static inline void TimevalSub(struct timeval* diff, struct timeval* start, struct timeval* end) {
+	diff->tv_sec = end->tv_sec - start->tv_sec;
+	diff->tv_usec = end->tv_usec - start->tv_usec;
+
+	if (diff->tv_usec < 0) {
+		diff->tv_usec += USEC_PER_SEC;
+		diff->tv_sec -= 1;
+	}
+}
+#if defined(__cplusplus)
+}
+#endif
 #endif
 

@@ -10,23 +10,23 @@
 
 #include <signal.h>
 #include <sys/time.h>
+#include <pthread.h>
 
 #include "audio.h"
 #include "common.h"
 #include "graph.h"
 #include "graphics.h"
-#include "serial.hh"
 #include "util.h"
 
-#define ECG_DATA_POINTS          6000
-#define ECG_DATA_TIME_MS         60000
+#define ECG_DATA_POINTS          1024
+#define ECG_DATA_TIME_MS         15000
 #define ECG_DATA_MS_PER_POINT    (ECG_DATA_TIME_MS / ECG_DATA_POINTS)
 
 struct _data {
-	int32_t leadI[ECG_DATA_POINTS];
-	int32_t leadII[ECG_DATA_POINTS];
-	int32_t leadIII[ECG_DATA_POINTS];
-	int32_t resp[ECG_DATA_POINTS];
+	float leadI[ECG_DATA_POINTS];
+	float leadII[ECG_DATA_POINTS];
+	float leadIII[ECG_DATA_POINTS];
+	float resp[ECG_DATA_POINTS];
 } g_Data;
 
 int g_Idx;
@@ -72,10 +72,10 @@ void doAlarms() {
 	ceeAudioOpenWav(cyanAlarm, "/home/chloe/Music/Philips intellivue cyan.wav");
 	ceeAudioState* yellowAlarm = ceeAudioMallocState();
 	ceeAudioInitialize(yellowAlarm);
-	ceeAudioOpenWav(yellowAlarm, "/home/chloe/Music/Philips intellivue cyan.wav");
+	ceeAudioOpenWav(yellowAlarm, "/home/chloe/Music/Philips intellivue yellow.wav");
 	ceeAudioState* redAlarm = ceeAudioMallocState();
 	ceeAudioInitialize(redAlarm);
-	ceeAudioOpenWav(redAlarm, "/home/chloe/Music/Philips intellivue cyan.wav");
+	ceeAudioOpenWav(redAlarm, "/home/chloe/Music/Philips intellivue red.wav");
 
 	for (;;) {
 		if ((std::chrono::high_resolution_clock::now() - start) > g_AlarmTimes[int(alarmSound)]) {
@@ -85,15 +85,21 @@ void doAlarms() {
 					break;
 
 				case AlarmSounds::CYAN:
-					ceeAudioPlay(cyanAlarm);
+					{
+						ceeAudioPlay(cyanAlarm);
+					}
 					break;
 
 				case AlarmSounds::YELLOW:
-					ceeAudioPlay(yellowAlarm);
+					{
+						ceeAudioPlay(yellowAlarm);
+					}
 					break;
 
 				case AlarmSounds::RED:
-					ceeAudioPlay(redAlarm);
+					{
+						ceeAudioPlay(redAlarm);
+					}
 					break;
 
 				default:
@@ -126,51 +132,6 @@ void updateTime() {
 	}
 }
 
-//void updateSerial(cee::monitor::Serial& Ser) {
-//	Ser.Read();
-//	uint32_t buffered;
-//	if ((buffered = Ser.GetBuffered()) >= sizeof(MonitorPacket)) {
-//		for (uint32_t i = 0; i < buffered - sizeof(MonitorPacket); i++) {
-//			if (strcmp((const char*)(Ser.GetReadBuffer() + i), MONITOR_MAGIC) == 0) {
-//				const MonitorPacket* packet = reinterpret_cast<const MonitorPacket*>(Ser.GetReadBuffer() + i);
-//				uint8_t chk = checksum((uint8_t*)packet, sizeof(MonitorPacket));
-//				if (chk != 0) {
-//					if (g_Idx > 0) {
-//						g_Data.leadI[g_Idx] = g_Data.leadI[g_Idx-1];
-//						g_Data.leadII[g_Idx] = g_Data.leadII[g_Idx-1];
-//						g_Data.leadIII[g_Idx] = g_Data.leadIII[g_Idx-1];
-//						g_Data.resp[g_Idx] = g_Data.resp[g_Idx-1];
-//					} else {
-//						g_Data.leadI[g_Idx] = g_Data.leadI[ECG_DATA_POINTS-1];
-//						g_Data.leadII[g_Idx] = g_Data.leadII[ECG_DATA_POINTS-1];
-//						g_Data.leadIII[g_Idx] = g_Data.leadIII[ECG_DATA_POINTS-1];
-//						g_Data.resp[g_Idx] = g_Data.resp[ECG_DATA_POINTS-1];
-//					}
-//					g_Idx++;
-//					if (g_Idx >= ECG_DATA_POINTS) g_Idx = 0;
-//					fprintf(stderr, "\e[1;93mChecksum failed. discarding packet.\n\e[0m");
-//					continue;
-//				}
-//
-//				g_Data.leadI[g_Idx] = packet->lead1;
-//				g_Data.leadII[g_Idx] = packet->lead2;
-//				g_Data.leadIII[g_Idx] = packet->lead3;
-//				g_Data.resp[g_Idx] = packet->resp;
-//
-//				g_Idx++;
-//				if (g_Idx >= ECG_DATA_POINTS) g_Idx = 0;
-//
-//				fprintf(stderr, "Packet recieved:\n\e[32m\tLead I:   %i\n\tLead II:  %i\n\tLead III: %i\n\tResp:     %i\n"
-//						"\tchecksum = %i\n\tmagic: %.4s\n\n\tChk = %u\e[0m\n",
-//						LE_INT(packet->lead1), LE_INT(packet->lead2), LE_INT(packet->lead3), LE_INT(packet->resp), chk,
-//						packet->magic, chk);
-//
-//				Ser.Consume(sizeof(MonitorPacket) + i);
-//			}
-//		}
-//	}
-//}
-
 int main(int argc, char** arg) {
 
 	signal(SIGINT, signalHandler);
@@ -184,8 +145,7 @@ int main(int argc, char** arg) {
 
 	std::thread alarmThread(doAlarms);
 
-	// TODO Replace serial with arduino for 4 channel I2C ADC
-	//cee::monitor::Serial serial("/dev/ttyUSB0");
+	// TODO initialize 4 channel I2C ADC (PCF8591)
 
 	const char* vertexShaderSource =
 		"attribute vec4 aPosition;\n"
@@ -235,34 +195,22 @@ int main(int argc, char** arg) {
 		{ GL_TYPE_FLOAT4, 4 * sizeof(float), 4 * sizeof(float), false }
 	};
 
-	uint16_t graphIndices[512 * 2];
-	uint32_t offset = 0;
-	for (uint32_t i = 0; i < 512 * 2; i += 2) {
-		graphIndices[i + 0] = offset;
-		graphIndices[i + 1] = offset + 1;
-		++offset;
-	}
-	float graphVertices[512 * 8];
+	float* graphVertices = (float*)malloc(ECG_DATA_POINTS * sizeof(float) * 8);;
 
-	uint32_t graphVbo, graphIbo;
+	uint32_t graphVbo;
 	ceeGraphicsCreateVertexBuffer(&graphVbo);
 	ceeGraphicsBindVertexBuffer(graphVbo);
-	ceeGraphicsSetVertices(graphVertices, 512 * 8 * sizeof(float));
 	ceeGraphicsSetVertexBufferLayout(layout, 2, 8 * sizeof(float));
-
-	ceeGraphicsCreateIndexBuffer(&graphIbo);
-	ceeGraphicsBindIndexBuffer(graphIbo);
-	ceeGraphicsSetIndices(graphIndices, 512 * 2 * sizeof(uint16_t));
+	ceeGraphicsSetVertices(graphVertices, ECG_DATA_POINTS * sizeof(float) * 8);
 
 	uint32_t i = 0;
 	timeval startTime, currentTime, diffTime;
 	gettimeofday(&startTime, NULL);
 	while (!terminate) {
 		updateTime();
-		//updateSerial(serial);
 
 		i++;
-		if (i > ECG_DATA_POINTS) i = 0;
+		i %= ECG_DATA_POINTS;
 		gettimeofday(&currentTime, NULL);
 		if (startTime.tv_usec > currentTime.tv_usec) {
 			currentTime.tv_sec--;
@@ -270,15 +218,15 @@ int main(int argc, char** arg) {
 		}
 		diffTime.tv_sec = currentTime.tv_sec - startTime.tv_sec;
 		diffTime.tv_usec = currentTime.tv_usec - startTime.tv_usec;
-		g_Data.leadII[i] = (int32_t)(20.0f*std::sin((float)diffTime.tv_sec + ((float)diffTime.tv_usec / 1000000.0f)));
+		g_Data.leadII[i] = 0.25f * std::sin(((float)diffTime.tv_sec + ((float)diffTime.tv_usec / 1000000.0f)) * 1.25f);
 
 		createGraphBuffer(
 				g_Data.leadII,
-				ECG_DATA_POINTS * sizeof(int32_t),
-				512,
-				0.7f,
-				0.0075f,
-				false,
+				ECG_DATA_POINTS * sizeof(float),
+				0.0f,
+				1.0f,
+				0.0f,
+				1.0f,
 				0.0f,
 				1.0f,
 				0.0f,
@@ -286,14 +234,14 @@ int main(int argc, char** arg) {
 				graphVertices);
 
 		ceeGraphicsBindVertexBuffer(graphVbo);
-		ceeGraphicsBindIndexBuffer(graphIbo);
-		ceeGraphicsSetSubVertices(graphVertices, 512 * 8 * sizeof(float));
+		ceeGraphicsSetSubVertices(graphVertices, ECG_DATA_POINTS * sizeof(float) * 8);
 
 		ceeGraphicsStartFrame(graphicsState);
 
 		ceeGraphicsClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 
-		ceeGraphicsFlushLines((512 * 2) - 1);
+		ceeGraphicsFlushLineStrip(i + 1, 0);
+		ceeGraphicsFlushLineStrip(ECG_DATA_POINTS - i - 1, i + 1);
 
 		ceeGraphicsEndFrame(graphicsState);
 	}
