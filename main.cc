@@ -16,6 +16,8 @@
 #include "common.h"
 #include "graph.h"
 #include "graphics.h"
+#include "i2c.hh"
+#include "adc.hh"
 #include "util.h"
 
 #define ECG_DATA_POINTS          1024
@@ -145,7 +147,9 @@ int main(int argc, char** arg) {
 
 	std::thread alarmThread(doAlarms);
 
-	// TODO initialize 4 channel I2C ADC (PCF8591)
+	std::shared_ptr<cee::I2C> i2cBus = std::make_shared<cee::I2C>();
+
+	cee::ADC adc = cee::ADC(i2cBus, cee::ADCType::PCF8591, 0x48);
 
 	const char* vertexShaderSource =
 		"attribute vec4 aPosition;\n"
@@ -218,7 +222,8 @@ int main(int argc, char** arg) {
 		}
 		diffTime.tv_sec = currentTime.tv_sec - startTime.tv_sec;
 		diffTime.tv_usec = currentTime.tv_usec - startTime.tv_usec;
-		g_Data.leadII[i] = 0.25f * std::sin(((float)diffTime.tv_sec + ((float)diffTime.tv_usec / 1000000.0f)) * 1.25f);
+//		g_Data.leadII[i] = 0.25f * std::sin(((float)diffTime.tv_sec + ((float)diffTime.tv_usec / 1000000.0f)) * 1.25f);
+		g_Data.leadII[i] = map8BitToFloat(adc.Read());
 
 		createGraphBuffer(
 				g_Data.leadII,

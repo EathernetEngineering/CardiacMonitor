@@ -55,6 +55,22 @@ static inline void TimevalSub(struct timeval* diff, struct timeval* start, struc
 		diff->tv_sec -= 1;
 	}
 }
+
+static inline float map8BitToFloat(uint16_t in) {
+	if (in > 255)
+		in = 255;
+	return in/255.f;
+}
+
+static inline float map10BitToFloat(uint16_t in) {
+	if (in > 1023)
+		in = 1023;
+	return in/1023.f;
+}
+
+static inline float map(float in, float inMin, float inMax, float outMin, float outMax) {
+	return (in - inMin) * (outMax - outMin) / (inMax - inMin) + outMin;
+}
 #if defined(__cplusplus)
 }
 #endif
