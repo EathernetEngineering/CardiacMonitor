@@ -1,28 +1,31 @@
+#include <GLES2/gl2.h>
 #include <atomic>
 #include <chrono>
-#include <iostream>
 #include <mutex>
+#include <ostream>
 #include <thread>
 
 #include <cassert>
 #include <cmath>
 #include <cstring>
+#include <fcntl.h>
+#include <unistd.h>
 
 #include <signal.h>
 #include <sys/time.h>
 #include <pthread.h>
 
 #include "audio.h"
-#include "common.h"
 #include "graph.h"
 #include "graphics.h"
 #include "i2c.hh"
 #include "adc.hh"
 #include "util.h"
+#include "dataProcessing.hh"
 
 #define ECG_DATA_POINTS          1024
 #define ECG_DATA_TIME_MS         15000
-#define ECG_DATA_MS_PER_POINT    (ECG_DATA_TIME_MS / ECG_DATA_POINTS)
+#define ECG_DATA_MS_PER_POINT    ECG_DATA_TIME_MS / ECG_DATA_POINTS
 
 struct _data {
 	float leadI[ECG_DATA_POINTS];
@@ -35,16 +38,19 @@ int g_Idx;
 
 std::atomic<bool> terminate = false;
 
-void signalHandler(int signum) {
-	static int inAborting = false;
-	if (inAborting)
-		return;
+extern "C" {
+	void signalHandler(int signum) {
+		static int inAborting = false;
+		if (inAborting)
+			return;
 
-	inAborting = true;
+		inAborting = true;
 
-	fprintf(stderr, "Recieved signal: %s...\taborting.\n", strsignal(signum));
+		const char* errorMessage = "Recieved signal...\taborting.\n";
+		write(STDERR_FILENO, errorMessage, strlen(errorMessage));
 
-	terminate = true;
+		terminate = true;
+	}
 }
 
 enum class AlarmSounds : int8_t {
@@ -199,13 +205,29 @@ int main(int argc, char** arg) {
 		{ GL_TYPE_FLOAT4, 4 * sizeof(float), 4 * sizeof(float), false }
 	};
 
-	float* graphVertices = (float*)malloc(ECG_DATA_POINTS * sizeof(float) * 8);;
+	float* graphVertices = (float*)calloc(ECG_DATA_POINTS * 8, sizeof(float));
+	float* processedVertices = (float*)calloc((ECG_DATA_POINTS) * 8, sizeof(float));
+	std::vector<float> peakMarkersVertices;
+	peakMarkersVertices.resize(1024, 0.0f);
 
-	uint32_t graphVbo;
+	uint32_t graphVbo, processedGraphVbo, peakMarkersVbo;
 	ceeGraphicsCreateVertexBuffer(&graphVbo);
 	ceeGraphicsBindVertexBuffer(graphVbo);
 	ceeGraphicsSetVertexBufferLayout(layout, 2, 8 * sizeof(float));
 	ceeGraphicsSetVertices(graphVertices, ECG_DATA_POINTS * sizeof(float) * 8);
+
+	ceeGraphicsCreateVertexBuffer(&processedGraphVbo);
+	ceeGraphicsBindVertexBuffer(processedGraphVbo);
+	ceeGraphicsSetVertexBufferLayout(layout, 2, 8 * sizeof(float));
+	ceeGraphicsSetVertices(processedVertices, (ECG_DATA_POINTS) * sizeof(float) * 8);
+
+	ceeGraphicsCreateVertexBuffer(&peakMarkersVbo);
+	ceeGraphicsBindVertexBuffer(peakMarkersVbo);
+	ceeGraphicsSetVertexBufferLayout(layout, 2, 8 * sizeof(float));
+	ceeGraphicsSetVertices(peakMarkersVertices.data(), peakMarkersVertices.size() * sizeof(float));
+
+	std::vector<float> qrsPeakLocations;
+	std::vector<float> doubleDifferenceSquared;
 
 	uint32_t i = 0;
 	timeval startTime, currentTime, diffTime;
@@ -222,13 +244,15 @@ int main(int argc, char** arg) {
 		}
 		diffTime.tv_sec = currentTime.tv_sec - startTime.tv_sec;
 		diffTime.tv_usec = currentTime.tv_usec - startTime.tv_usec;
-//		g_Data.leadII[i] = 0.25f * std::sin(((float)diffTime.tv_sec + ((float)diffTime.tv_usec / 1000000.0f)) * 1.25f);
+		 float sinVal = (static_cast<float>(diffTime.tv_sec) + (static_cast<float>(diffTime.tv_usec) / 1000000.0f));
+//		g_Data.leadII[i] = 0.1f * ((2.0f * pow(std::sin(sinVal*5.0f), 50.f)) + (0.3f * std::pow(std::sin(sinVal*5.f - 1.f), 1.f)) + (0.2f * std::pow(std::sin(sinVal*5.f + 1.f), 50.f)) - (0.5f * std::pow(std::sin(sinVal*5.f - 0.2f), 50.f)) - (0.2f * std::pow(std::sin(sinVal*5.f + 0.4f), 50.f)));
 		g_Data.leadII[i] = map8BitToFloat(adc.Read());
+		cee::CalculateDoubleDifferenceSquared(std::vector<float>(g_Data.leadII, g_Data.leadII + ECG_DATA_POINTS), doubleDifferenceSquared);
 
 		createGraphBuffer(
 				g_Data.leadII,
 				ECG_DATA_POINTS * sizeof(float),
-				0.0f,
+				0.25f,
 				1.0f,
 				0.0f,
 				1.0f,
@@ -237,18 +261,61 @@ int main(int argc, char** arg) {
 				0.0f,
 				1.0f,
 				graphVertices);
-
-		ceeGraphicsBindVertexBuffer(graphVbo);
-		ceeGraphicsSetSubVertices(graphVertices, ECG_DATA_POINTS * sizeof(float) * 8);
-
-		ceeGraphicsStartFrame(graphicsState);
+/*
+		createGraphBuffer(
+				doubleDifferenceSquared.data(),
+				doubleDifferenceSquared.size() * sizeof(float),
+				-0.25f,
+				1.0f,
+				0.0f,
+				1.0f,
+				0.0f,
+				0.0f,
+				1.0f,
+				1.0f,
+				processedVertices);
+*/
+		cee::FindQrsPeaks(doubleDifferenceSquared, 0.5f, qrsPeakLocations);
+		createPeakChevrons(
+				qrsPeakLocations.data(),
+				qrsPeakLocations.size() * sizeof(float),
+				0.5f,
+				0.1f,
+				0.0f,
+				1.0f,
+				0.0f,
+				1.0f,
+				peakMarkersVertices.data(),
+				peakMarkersVertices.size() * sizeof(float));
 
 		ceeGraphicsClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+		ceeGraphicsStartFrame(graphicsState);
 
+		ceeGraphicsBindVertexBuffer(graphVbo);
+		ceeGraphicsSetVertexBufferLayout(layout, 2, 8 * sizeof(float));
+		ceeGraphicsSetSubVertices(graphVertices, ECG_DATA_POINTS * sizeof(float) * 8);
 		ceeGraphicsFlushLineStrip(i + 1, 0);
 		ceeGraphicsFlushLineStrip(ECG_DATA_POINTS - i - 1, i + 1);
 
+		//ceeGraphicsBindVertexBuffer(processedGraphVbo);
+		//ceeGraphicsSetVertexBufferLayout(layout, 2, 8 * sizeof(float));
+		//ceeGraphicsSetSubVertices(processedVertices, (ECG_DATA_POINTS) * sizeof(float) * 8);
+		//ceeGraphicsFlushLineStrip(i + 1, 0);
+		//ceeGraphicsFlushLineStrip(ECG_DATA_POINTS - i - 1, i + 1);
+
+		if (qrsPeakLocations.size()) {
+			ceeGraphicsBindVertexBuffer(peakMarkersVbo);
+			ceeGraphicsSetVertexBufferLayout(layout, 2, 8 * sizeof(float));
+			ceeGraphicsSetSubVertices(peakMarkersVertices.data(), qrsPeakLocations.size() * 8 * 3 * sizeof(float));
+			ceeGraphicsFlushTriangles(qrsPeakLocations.size() * 3);
+		}
+
 		ceeGraphicsEndFrame(graphicsState);
+		GLenum ec;
+		if ((ec = glGetError()) != GL_NO_ERROR) {
+			printf("OpenGL error: (%d)\n", ec);
+			raise(SIGINT);
+		}
 	}
 
 	alarmThread.join();

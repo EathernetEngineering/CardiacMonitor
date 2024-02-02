@@ -87,7 +87,7 @@ void ceeGraphicsSetIndices(uint16_t* indices, uint32_t size);
 void ceeGraphicsDeleteIndexBuffer(uint32_t* buffer);
 
 void ceeGraphicsStartFrame(ceeGraphicsState* state);
-void ceeGraphicsFlushTriangles(uint32_t indicesCount);
+void ceeGraphicsFlushTriangles(uint32_t vertexCount);
 void ceeGraphicsFlushLines(uint32_t indicesCount);
 void ceeGraphicsFlushLineStrip(uint32_t vertexCount, uint32_t firstVertex);
 void ceeGraphicsEndFrame(ceeGraphicsState* state);

@@ -15,9 +15,8 @@ extern "C" {
  *  This function takes the an input of raw data, and creates a vertex buffer
  *  for a line to be rendered by OpenGL. This function does not create a
  *  vertex buffer, it creates the data to be used by a vertex buffer.
- *  Format of buffer is x, y, z, w, r, g, b, a, width.
- *  Where x, y, z, w, r, g, b, a are floats and width is un 8 bit unsiged
- *  integer.
+ *  Format of buffer is x, y, z, w, r, g, b, a.
+ *  Where x, y, z, w, r, g, b, a are 32 bit floats.
  *
  *  @param data The raw data to be graphed.
  *  @param length The length in bytes of the array passed into parameter one.
@@ -29,9 +28,9 @@ extern "C" {
  *  @param g The green value of the line from 0 to 1.
  *  @param b The blue value of the line from 0 to 1.
  *  @param a The alpha value of the line from 0 to 1.
- *  @param buffer The pout buffer to be used. Can be null.
+ *  @param buffer The out buffer to be used.
  *
- *  @return A pointer to the vertex buffer data. Must be freed.
+ *  @return The pointer to the buffer provided in buffer parameter.
  *
  */
 float* createGraphBuffer(
@@ -46,6 +45,42 @@ float* createGraphBuffer(
 		float b,
 		float a,
 		float buffer[]);
+
+/**
+ *  Function to construct a vertex buffer in OpenGL style from an array from
+ *  raw data.
+ *
+ *  This function takes the an input of raw data, and creates a vertex buffer
+ *  for several chevrons to be rendered by OpenGL. This function does not create a
+ *  vertex buffer, it creates the data to be used by a vertex buffer.
+ *  Format of buffer is x, y, z, w, r, g, b, a.
+ *  Where x, y, z, w, r, g, b, a are 32 bit floats.
+ *
+ *  @param locations The x positions of the chevrons to be drawn.
+ *  @param length The length in bytes of the array passed into parameter one.
+ *  @param yAlignment The y position of the base of the chevrons.
+ *  @param scale The size of the chevrons to be drawn.
+ *  @param r The red value of the line from 0 to 1.
+ *  @param g The green value of the line from 0 to 1.
+ *  @param b The blue value of the line from 0 to 1.
+ *  @param a The alpha value of the line from 0 to 1.
+ *  @param buffer The out buffer to be used.
+ *  @param bufferLength The length out buffer to be used.
+ *
+ *  @return The pointer to the buffer provided in buffer parameter.
+ *
+ */
+float* createPeakChevrons(
+		float* locations,
+		size_t length,
+		float yAlignment,
+		float scale,
+		float r,
+		float g,
+		float b,
+		float a,
+		float* buffer,
+		size_t bufferLength);
 
 #if defined(__cplusplus)
 }

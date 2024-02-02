@@ -44,6 +44,20 @@ gbm_bo_get_stride_for_plane(struct gbm_bo *bo, int plane);
 WEAK uint32_t
 gbm_bo_get_offset(struct gbm_bo *bo, int plane);
 
+WEAK struct gbm_surface *
+gbm_surface_create_with_modifiers(struct gbm_device *gbm,
+                                  uint32_t width, uint32_t height,
+                                  uint32_t format,
+                                  const uint64_t *modifiers,
+                                  const unsigned int count);
+WEAK struct gbm_bo *
+gbm_bo_create_with_modifiers(struct gbm_device *gbm,
+                             uint32_t width, uint32_t height,
+                             uint32_t format,
+                             const uint64_t *modifiers,
+                             const unsigned int count);
+
+
 static EGLint ceeGraphicsCompileShader(GLenum type, const char source[], GLuint* shader);
 static void ceeGraphicsSwapBuffers(ceeGraphicsState* state);
 static int32_t FindDrmDevice(drmModeRes** resources);
@@ -249,7 +263,15 @@ void ceeGraphicsInitialize(ceeGraphicsState* state) {
 	state->GbmDevice = gbm_create_device(state->DrmFd);
 	state->SurfaceFormat = GBM_FORMAT_XRGB8888;
 
-	state->GbmSurface = gbm_surface_create(state->GbmDevice, state->DrmMode.hdisplay, state->DrmMode.vdisplay, state->SurfaceFormat, GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING);
+	uint64_t modifier = DRM_FORMAT_MOD_LINEAR;
+
+	if (gbm_surface_create_with_modifiers) {
+		state->GbmSurface = gbm_surface_create_with_modifiers(state->GbmDevice, state->DrmMode.hdisplay, state->DrmMode.vdisplay, state->SurfaceFormat,&modifier, 1);
+	}
+
+	if (state->GbmSurface == NULL) {
+		state->GbmSurface = gbm_surface_create(state->GbmDevice, state->DrmMode.hdisplay, state->DrmMode.vdisplay, state->SurfaceFormat, GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING);
+	}
 
 	if (state->GbmSurface == NULL) {
 		printf("Failed to create surface.\n");
@@ -449,7 +471,7 @@ void ceeGraphicsSetVertexBufferLayout(ceeGraphicsVertexBufferElement layout[], u
 				dataTypeToGlBaseType(layout[i].type),
 				layout[i].normalized ? GL_TRUE : GL_FALSE,
 				stride,
-				(void*)layout[i].offset);
+				(void*)(intptr_t)layout[i].offset);
 		glEnableVertexAttribArray(i);
 	}
 }
@@ -493,8 +515,8 @@ void ceeGraphicsStartFrame(ceeGraphicsState* state) {
 	glClear(GL_COLOR_BUFFER_BIT);
 }
 
-void ceeGraphicsFlushTriangles(uint32_t indicesCount) {
-	glDrawElements(GL_TRIANGLES, indicesCount, GL_UNSIGNED_SHORT, (void*)0);
+void ceeGraphicsFlushTriangles(uint32_t vertexCount) {
+	glDrawArrays(GL_TRIANGLES, 0, vertexCount);
 }
 
 void ceeGraphicsFlushLines(uint32_t indicesCount) {
