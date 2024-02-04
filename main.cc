@@ -1,6 +1,9 @@
 #include <GLES2/gl2.h>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
+#include <ctime>
+#include <exception>
 #include <mutex>
 #include <ostream>
 #include <thread>
@@ -22,21 +25,27 @@
 #include "adc.hh"
 #include "util.h"
 #include "dataProcessing.hh"
+#include "fontRenderer.h"
 
 #define ECG_DATA_POINTS          1024
-#define ECG_DATA_TIME_MS         15000
+#define ECG_DATA_TIME_MS         15000.f
 #define ECG_DATA_MS_PER_POINT    ECG_DATA_TIME_MS / ECG_DATA_POINTS
+#define SAMPLE_RATE              ECG_DATA_POINTS/(ECG_DATA_TIME_MS/1000)
 
-struct _data {
+struct EcgData {
 	float leadI[ECG_DATA_POINTS];
 	float leadII[ECG_DATA_POINTS];
 	float leadIII[ECG_DATA_POINTS];
 	float resp[ECG_DATA_POINTS];
-} g_Data;
+	bool leadsConnected;
+};
+
+static EcgData g_Data;
+std::mutex g_DataMutex;
 
 int g_Idx;
 
-std::atomic<bool> terminate = false;
+std::atomic<bool> g_Terminate = false;
 
 extern "C" {
 	void signalHandler(int signum) {
@@ -49,7 +58,7 @@ extern "C" {
 		const char* errorMessage = "Recieved signal...\taborting.\n";
 		write(STDERR_FILENO, errorMessage, strlen(errorMessage));
 
-		terminate = true;
+		g_Terminate = true;
 	}
 }
 
@@ -62,14 +71,14 @@ enum class AlarmSounds : int8_t {
 };
 
 static std::chrono::duration<long int, std::milli> g_AlarmTimes[] = {
-	std::chrono::milliseconds(500),
-	std::chrono::milliseconds(2000),
-	std::chrono::milliseconds(2000),
-	std::chrono::milliseconds(1000)
+	std::chrono::milliseconds(25),      // NONE
+	std::chrono::milliseconds(2000),    // CYAN
+	std::chrono::milliseconds(2000),    // YELLOW
+	std::chrono::milliseconds(1000)     // RED
 };
 
-static AlarmSounds alarmSound = AlarmSounds::NONE;
-static std::mutex alarmSoundMutex;
+static AlarmSounds g_AlarmSound = AlarmSounds::NONE;
+static std::mutex g_AlarmSoundMutex;
 
 void doAlarms() {
 	using namespace std::chrono_literals;
@@ -86,9 +95,9 @@ void doAlarms() {
 	ceeAudioOpenWav(redAlarm, "/home/chloe/Music/Philips intellivue red.wav");
 
 	for (;;) {
-		if ((std::chrono::high_resolution_clock::now() - start) > g_AlarmTimes[int(alarmSound)]) {
+		if ((std::chrono::high_resolution_clock::now() - start) > g_AlarmTimes[int(g_AlarmSound)]) {
 			start = std::chrono::high_resolution_clock::now();
-			switch (alarmSound) {
+			switch (g_AlarmSound) {
 				case AlarmSounds::NONE:
 					break;
 
@@ -112,11 +121,11 @@ void doAlarms() {
 
 				default:
 					fprintf(stderr, "\e[32mWarning: Unknown alarm sound, setting to red.");
-					std::lock_guard<std::mutex> guard(alarmSoundMutex);
-					alarmSound = AlarmSounds::RED;
+					std::lock_guard<std::mutex> guard(g_AlarmSoundMutex);
+					g_AlarmSound = AlarmSounds::RED;
 			}
 		}
-		if (terminate) {
+		if (g_Terminate) {
 			break;
 		}
 	}
@@ -128,15 +137,26 @@ void doAlarms() {
 	ceeAudioFreeState(redAlarm);
 }
 
-void updateTime() {
+void doSensors() {
 	using namespace std::chrono_literals;
-	static auto start = std::chrono::steady_clock::now();
+	timespec startTime, currentTime, diffTime;
+	clock_gettime(CLOCK_MONOTONIC, &startTime);
+	const float sinFreq = 8.2;
+	while (!g_Terminate) {
+		clock_gettime(CLOCK_MONOTONIC, &currentTime);
+		TimespecSub(&diffTime, &startTime, &currentTime);
+		 float sinVal = (static_cast<float>(diffTime.tv_sec) + (static_cast<float>(diffTime.tv_nsec) / NSEC_PER_SEC));
+		{
+			std::scoped_lock lock(g_DataMutex);
+			g_Data.leadII[g_Idx] = 0.1f * ((2.0f * pow(std::sin(sinVal*sinFreq), 50.f)) + (0.3f * std::pow(std::sin(sinVal*sinFreq - 1.f), 1.f)) + (0.2f * std::pow(std::sin(sinVal*sinFreq + 1.f), 50.f)) - (0.5f * std::pow(std::sin(sinVal*sinFreq - 0.2f), 50.f)) - (0.2f * std::pow(std::sin(sinVal*sinFreq + 0.4f), 50.f)));
+//			g_Data.leadII[g_Idx] = map8BitToFloat(adc.Read());
 
-	if (std::chrono::steady_clock::now() - start > 10s) {
-		start = std::chrono::steady_clock::now();
-		std::lock_guard<std::mutex> guard(alarmSoundMutex);
-		alarmSound = (AlarmSounds)(((int8_t)alarmSound) + 1);
-		if (alarmSound > AlarmSounds::RED) alarmSound = AlarmSounds::NONE;
+			g_Data.leadsConnected = true;
+		}
+
+		g_Idx++;
+		g_Idx %= ECG_DATA_POINTS;
+		std::this_thread::sleep_for(std::chrono::duration<float, std::milli>(ECG_DATA_MS_PER_POINT));
 	}
 }
 
@@ -151,13 +171,16 @@ int main(int argc, char** arg) {
 
 	ceeGraphicsInitialize(graphicsState);
 
+	g_AlarmSound = AlarmSounds::NONE;
+
 	std::thread alarmThread(doAlarms);
+	std::thread sensorsThread(doSensors);
 
 	std::shared_ptr<cee::I2C> i2cBus = std::make_shared<cee::I2C>();
 
 	cee::ADC adc = cee::ADC(i2cBus, cee::ADCType::PCF8591, 0x48);
 
-	const char* vertexShaderSource =
+	const char* basicVertexShaderSource =
 		"attribute vec4 aPosition;\n"
 		"attribute vec4 aColor;\n"
 		"\n"
@@ -168,7 +191,7 @@ int main(int argc, char** arg) {
 		"	vColor = aColor;\n"
 		"}\n";
 
-	const char* fragmentShaderSource =
+	const char* basicFragmentShaderSource =
 		"precision mediump float;\n"
 		"\n"
 		"varying vec4 vColor;\n"
@@ -177,85 +200,80 @@ int main(int argc, char** arg) {
 		"	gl_FragColor = vColor;\n"
 		"}\n";
 
-	const char* shaderAttribNames[] = {
+	const char* basicShaderAttribNames[] = {
 		"aPosition",
 		"aColor"
 	};
-	uint32_t shaderAttribLocations[] = {
+	uint32_t basicShaderAttribLocations[] = {
 		0,
 		1,
 	};
-	uint32_t shaderAttribCount = 2;
+	uint32_t basicShaderAttribCount = 2;
 
-	uint32_t program;
+	uint32_t basicShaderProgram;
 
 	assert(
-			ceeGraphicsCreateShaderProgram(vertexShaderSource,
-				fragmentShaderSource,
-				&program,
-				shaderAttribNames,
-				shaderAttribLocations,
-				shaderAttribCount)
+			ceeGraphicsCreateShaderProgram(basicVertexShaderSource,
+				basicFragmentShaderSource,
+				&basicShaderProgram,
+				basicShaderAttribNames,
+				basicShaderAttribLocations,
+				basicShaderAttribCount)
 			!= false);
 
-	ceeGraphicsUseShaderProgram(program);
-
-	ceeGraphicsVertexBufferElement layout[] = {
+	ceeGraphicsVertexBufferElement basicVertexlayout[] = {
 		{ GL_TYPE_FLOAT4, 4 * sizeof(float), 0, false },
 		{ GL_TYPE_FLOAT4, 4 * sizeof(float), 4 * sizeof(float), false }
 	};
 
-	float* graphVertices = (float*)calloc(ECG_DATA_POINTS * 8, sizeof(float));
-	float* processedVertices = (float*)calloc((ECG_DATA_POINTS) * 8, sizeof(float));
-	std::vector<float> peakMarkersVertices;
-	peakMarkersVertices.resize(1024, 0.0f);
+	const char* ttfFileName = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf";
+	ceeFontRendererIntialize(ttfFileName, 175.0f);
+
+	float* graphVertices = reinterpret_cast<float*>(calloc(ECG_DATA_POINTS * 8, sizeof(float)));
+	float* processedVertices = reinterpret_cast<float*>(calloc((ECG_DATA_POINTS) * 8, sizeof(float)));
+	float* peakMarkersVertices = reinterpret_cast<float*>(calloc(1024, sizeof(float)));
 
 	uint32_t graphVbo, processedGraphVbo, peakMarkersVbo;
 	ceeGraphicsCreateVertexBuffer(&graphVbo);
 	ceeGraphicsBindVertexBuffer(graphVbo);
-	ceeGraphicsSetVertexBufferLayout(layout, 2, 8 * sizeof(float));
+	ceeGraphicsSetVertexBufferLayout(basicVertexlayout, 2, 8 * sizeof(float));
 	ceeGraphicsSetVertices(graphVertices, ECG_DATA_POINTS * sizeof(float) * 8);
 
 	ceeGraphicsCreateVertexBuffer(&processedGraphVbo);
 	ceeGraphicsBindVertexBuffer(processedGraphVbo);
-	ceeGraphicsSetVertexBufferLayout(layout, 2, 8 * sizeof(float));
+	ceeGraphicsSetVertexBufferLayout(basicVertexlayout, 2, 8 * sizeof(float));
 	ceeGraphicsSetVertices(processedVertices, (ECG_DATA_POINTS) * sizeof(float) * 8);
 
 	ceeGraphicsCreateVertexBuffer(&peakMarkersVbo);
 	ceeGraphicsBindVertexBuffer(peakMarkersVbo);
-	ceeGraphicsSetVertexBufferLayout(layout, 2, 8 * sizeof(float));
-	ceeGraphicsSetVertices(peakMarkersVertices.data(), peakMarkersVertices.size() * sizeof(float));
+	ceeGraphicsSetVertexBufferLayout(basicVertexlayout, 2, 8 * sizeof(float));
+	ceeGraphicsSetVertices(peakMarkersVertices, 1024 * sizeof(float));
 
 	std::vector<float> qrsPeakLocations;
 	std::vector<float> doubleDifferenceSquared;
 
-	uint32_t i = 0;
-	timeval startTime, currentTime, diffTime;
-	gettimeofday(&startTime, NULL);
-	while (!terminate) {
-		updateTime();
+	std::array<float, ECG_DATA_POINTS> leadIICopy;
+	bool leadsConnected;
 
-		i++;
-		i %= ECG_DATA_POINTS;
-		gettimeofday(&currentTime, NULL);
-		if (startTime.tv_usec > currentTime.tv_usec) {
-			currentTime.tv_sec--;
-			currentTime.tv_usec += 1000000;
+	g_Terminate.store(false);
+	while (!g_Terminate) {
+		{
+			std::scoped_lock lock(g_DataMutex);
+			std::copy(g_Data.leadII, g_Data.leadII + ECG_DATA_POINTS, leadIICopy.begin());
+
+			leadsConnected = g_Data.leadsConnected;
 		}
-		diffTime.tv_sec = currentTime.tv_sec - startTime.tv_sec;
-		diffTime.tv_usec = currentTime.tv_usec - startTime.tv_usec;
-		 float sinVal = (static_cast<float>(diffTime.tv_sec) + (static_cast<float>(diffTime.tv_usec) / 1000000.0f));
-//		g_Data.leadII[i] = 0.1f * ((2.0f * pow(std::sin(sinVal*5.0f), 50.f)) + (0.3f * std::pow(std::sin(sinVal*5.f - 1.f), 1.f)) + (0.2f * std::pow(std::sin(sinVal*5.f + 1.f), 50.f)) - (0.5f * std::pow(std::sin(sinVal*5.f - 0.2f), 50.f)) - (0.2f * std::pow(std::sin(sinVal*5.f + 0.4f), 50.f)));
-		g_Data.leadII[i] = map8BitToFloat(adc.Read());
-		cee::CalculateDoubleDifferenceSquared(std::vector<float>(g_Data.leadII, g_Data.leadII + ECG_DATA_POINTS), doubleDifferenceSquared);
+
+		uint32_t i = g_Idx;
+		cee::CalculateDoubleDifferenceSquared(std::vector<float>(leadIICopy.begin(), leadIICopy.end()), doubleDifferenceSquared);
 
 		createGraphBuffer(
-				g_Data.leadII,
-				ECG_DATA_POINTS * sizeof(float),
+				leadIICopy.data(),
+				leadIICopy.size() * sizeof(float),
 				0.25f,
 				1.0f,
-				0.0f,
-				1.0f,
+				-0.2f,
+				0.8f,
 				0.0f,
 				1.0f,
 				0.0f,
@@ -281,45 +299,71 @@ int main(int argc, char** arg) {
 				qrsPeakLocations.size() * sizeof(float),
 				0.5f,
 				0.1f,
+				0.8f,
+				-0.2f,
 				0.0f,
 				1.0f,
 				0.0f,
 				1.0f,
-				peakMarkersVertices.data(),
-				peakMarkersVertices.size() * sizeof(float));
+				peakMarkersVertices,
+				1024 * sizeof(float));
 
+		ceeGraphicsUseShaderProgram(basicShaderProgram);
 		ceeGraphicsClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 		ceeGraphicsStartFrame(graphicsState);
 
 		ceeGraphicsBindVertexBuffer(graphVbo);
-		ceeGraphicsSetVertexBufferLayout(layout, 2, 8 * sizeof(float));
+		ceeGraphicsSetVertexBufferLayout(basicVertexlayout, 2, 8 * sizeof(float));
 		ceeGraphicsSetSubVertices(graphVertices, ECG_DATA_POINTS * sizeof(float) * 8);
-		ceeGraphicsFlushLineStrip(i + 1, 0);
-		ceeGraphicsFlushLineStrip(ECG_DATA_POINTS - i - 1, i + 1);
+		ceeGraphicsFlushLineStrip(g_Idx + 1, 0);
+		ceeGraphicsFlushLineStrip(ECG_DATA_POINTS - g_Idx - 1, g_Idx + 1);
 
 		//ceeGraphicsBindVertexBuffer(processedGraphVbo);
 		//ceeGraphicsSetVertexBufferLayout(layout, 2, 8 * sizeof(float));
 		//ceeGraphicsSetSubVertices(processedVertices, (ECG_DATA_POINTS) * sizeof(float) * 8);
-		//ceeGraphicsFlushLineStrip(i + 1, 0);
-		//ceeGraphicsFlushLineStrip(ECG_DATA_POINTS - i - 1, i + 1);
+		//ceeGraphicsFlushLineStrip(g_Idx + 1, 0);
+		//ceeGraphicsFlushLineStrip(ECG_DATA_POINTS - g_Idx - 1, g_Idx + 1);
 
 		if (qrsPeakLocations.size()) {
 			ceeGraphicsBindVertexBuffer(peakMarkersVbo);
-			ceeGraphicsSetVertexBufferLayout(layout, 2, 8 * sizeof(float));
-			ceeGraphicsSetSubVertices(peakMarkersVertices.data(), qrsPeakLocations.size() * 8 * 3 * sizeof(float));
+			ceeGraphicsSetVertexBufferLayout(basicVertexlayout, 2, 8 * sizeof(float));
+			ceeGraphicsSetSubVertices(peakMarkersVertices, qrsPeakLocations.size() * 8 * 3 * sizeof(float));
 			ceeGraphicsFlushTriangles(qrsPeakLocations.size() * 3);
 		}
+
+		uint32_t rate = (static_cast<float>(qrsPeakLocations.size()) / ECG_DATA_TIME_MS) * 60000.f;
+		char rateStr[3];
+		if (rate > 999) {
+			rate = 999;
+		}
+		sprintf(rateStr, "%d", rate);
+
+		float rateTextX = 1600.f, rateTextY = 750.f;
+		ceeFontRendererDraw(rateStr, 1920, 1080, &rateTextX, &rateTextY);
 
 		ceeGraphicsEndFrame(graphicsState);
 		GLenum ec;
 		if ((ec = glGetError()) != GL_NO_ERROR) {
-			printf("OpenGL error: (%d)\n", ec);
+			printf("OpenGL error: (%d) on line %d\n", ec, __LINE__);
 			raise(SIGINT);
+		}
+
+		if (rate > 150) {
+			std::scoped_lock lock(g_AlarmSoundMutex);
+			g_AlarmSound = AlarmSounds::RED;
+		} else if (rate > 120) {
+			std::scoped_lock lock(g_AlarmSoundMutex);
+			g_AlarmSound = AlarmSounds::YELLOW;
+		} else if (!leadsConnected) {
+			std::scoped_lock lock(g_AlarmSoundMutex);
+			g_AlarmSound = AlarmSounds::CYAN;
 		}
 	}
 
+	sensorsThread.join();
 	alarmThread.join();
 
+	ceeFontRendererShutdown();
 	ceeGraphicsShutdown(graphicsState);
 	ceeGraphicsFreeState(graphicsState);
 

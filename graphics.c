@@ -69,36 +69,49 @@ static void PageFlipHandler(int32_t fd, uint32_t frame, uint32_t sec, uint32_t u
 
 static GLuint getComponentCount(int type) {
 	switch (type) {
-	case GL_TYPE_BOOL:      return 1;
-	case GL_TYPE_INT:       return 1;
-	case GL_TYPE_INT2:      return 2;
-	case GL_TYPE_INT3:      return 3;
-	case GL_TYPE_INT4:      return 4;
-	case GL_TYPE_FLOAT:     return 1;
-	case GL_TYPE_FLOAT2:    return 2;
-	case GL_TYPE_FLOAT3:    return 3;
-	case GL_TYPE_FLOAT4:    return 4;
-	case GL_TYPE_MAT3:      return 3 * 3;
-	case GL_TYPE_MAT4:      return 4 * 4;
+	case GL_TYPE_BOOL:             return 1;
+	case GL_TYPE_UNSIGNED_BYTE:    return 1;
+	case GL_TYPE_INT:              return 1;
+	case GL_TYPE_INT2:             return 2;
+	case GL_TYPE_INT3:             return 3;
+	case GL_TYPE_INT4:             return 4;
+	case GL_TYPE_FLOAT:            return 1;
+	case GL_TYPE_FLOAT2:           return 2;
+	case GL_TYPE_FLOAT3:           return 3;
+	case GL_TYPE_FLOAT4:           return 4;
+	case GL_TYPE_MAT3:             return 3 * 3;
+	case GL_TYPE_MAT4:             return 4 * 4;
 	}
-	assert(0);
+	assert(!"Undefined type.");
 }
 
 static GLenum dataTypeToGlBaseType(int type) {
 	switch (type) {
-	case GL_TYPE_BOOL:      return GL_BOOL;
-	case GL_TYPE_INT:       return GL_INT;
-	case GL_TYPE_INT2:      return GL_INT;
-	case GL_TYPE_INT3:      return GL_INT;
-	case GL_TYPE_INT4:      return GL_INT;
-	case GL_TYPE_FLOAT:     return GL_FLOAT;
-	case GL_TYPE_FLOAT2:    return GL_FLOAT;
-	case GL_TYPE_FLOAT3:    return GL_FLOAT;
-	case GL_TYPE_FLOAT4:    return GL_FLOAT;
-	case GL_TYPE_MAT3:      return GL_FLOAT;
-	case GL_TYPE_MAT4:      return GL_FLOAT;
+	case GL_TYPE_BOOL:             return GL_BOOL;
+	case GL_TYPE_UNSIGNED_BYTE:    return GL_UNSIGNED_BYTE;
+	case GL_TYPE_INT:              return GL_INT;
+	case GL_TYPE_INT2:             return GL_INT;
+	case GL_TYPE_INT3:             return GL_INT;
+	case GL_TYPE_INT4:             return GL_INT;
+	case GL_TYPE_FLOAT:            return GL_FLOAT;
+	case GL_TYPE_FLOAT2:           return GL_FLOAT;
+	case GL_TYPE_FLOAT3:           return GL_FLOAT;
+	case GL_TYPE_FLOAT4:           return GL_FLOAT;
+	case GL_TYPE_MAT3:             return GL_FLOAT;
+	case GL_TYPE_MAT4:             return GL_FLOAT;
 	}
-	assert(0);
+	assert(!"Undefined type.");
+}
+
+static GLenum formatToGlBaseFormat(int format) {
+	switch (format) {
+	case GL_FORMAT_ALPHA:              return GL_ALPHA;
+	case GL_FORMAT_RGB:                return GL_RGB;
+	case GL_FORMAT_RGBA:               return GL_RGBA;
+	case GL_FORMAT_LUMINANCE:          return GL_LUMINANCE;
+	case GL_FORMAT_LUMINANCE_APLHA:    return GL_LUMINANCE_ALPHA;
+	}
+	assert(!"Undefined format.");
 }
 
 struct DrmConnector {
@@ -343,6 +356,9 @@ void ceeGraphicsInitialize(ceeGraphicsState* state) {
 
 	state->DrmEventContext.page_flip_handler = PageFlipHandler;
 	state->DrmEventContext.version = 2;
+
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 }
 
 void ceeGraphicsShutdown(ceeGraphicsState* state) {
@@ -510,6 +526,28 @@ void ceeGraphicsDeleteIndexBuffer(uint32_t* buffer) {
 	*buffer = 0;
 }
 
+void ceeGraphicsCreateTexture(uint32_t* texture) {
+	glGenTextures(1, texture);
+}
+
+void ceeGraphicsBindTexture(uint32_t texture) {
+	glBindTexture(GL_TEXTURE_2D, texture);
+}
+
+void ceeGraphicsUnbindTexture() {
+	glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+void ceeGraphicsSetTextureData(size_t width, size_t height, int16_t format, int16_t type, uint8_t* data) {
+	glTexImage2D(GL_TEXTURE_2D, 0, formatToGlBaseFormat(format), width, height, 0, formatToGlBaseFormat(format), dataTypeToGlBaseType(type), data);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+}
+
+void ceeGraphicsDeleteTexture(uint32_t* texture) {
+	glDeleteTextures(1, texture);
+	*texture= 0;
+}
+
 void ceeGraphicsStartFrame(ceeGraphicsState* state) {
 	glViewport(0, 0, state->screenWidth, state->screenHeight);
 	glClear(GL_COLOR_BUFFER_BIT);
@@ -525,6 +563,10 @@ void ceeGraphicsFlushLines(uint32_t indicesCount) {
 
 void ceeGraphicsFlushLineStrip(uint32_t vertexCount, uint32_t firstVertex) {
 	glDrawArrays(GL_LINE_STRIP, firstVertex, vertexCount);
+}
+
+void ceeGraphicsFlushQuads(uint32_t indexCount) {
+	glDrawElements(GL_TRIANGLES, indexCount, GL_UNSIGNED_SHORT, (void*)0);
 }
 
 void ceeGraphicsEndFrame(ceeGraphicsState* state) {

@@ -10,6 +10,7 @@
 
 enum GlDataType {
 	GL_TYPE_BOOL,
+	GL_TYPE_UNSIGNED_BYTE,
 	GL_TYPE_INT,
 	GL_TYPE_INT2,
 	GL_TYPE_INT3,
@@ -20,6 +21,14 @@ enum GlDataType {
 	GL_TYPE_FLOAT4,
 	GL_TYPE_MAT3,
 	GL_TYPE_MAT4
+};
+
+enum GlFormatType {
+	GL_FORMAT_ALPHA,
+	GL_FORMAT_RGB,
+	GL_FORMAT_RGBA,
+	GL_FORMAT_LUMINANCE,
+	GL_FORMAT_LUMINANCE_APLHA
 };
 
 typedef struct _ceeGraphicsState ceeGraphicsState;
@@ -86,10 +95,17 @@ void ceeGraphicsUnbindIndexBuffer();
 void ceeGraphicsSetIndices(uint16_t* indices, uint32_t size);
 void ceeGraphicsDeleteIndexBuffer(uint32_t* buffer);
 
+void ceeGraphicsCreateTexture(uint32_t* texture);
+void ceeGraphicsBindTexture(uint32_t texture);
+void ceeGraphicsUnbindTexture();
+void ceeGraphicsSetTextureData(size_t width, size_t height, int16_t format, int16_t type, uint8_t* data);
+void ceeGraphicsDeleteTexture(uint32_t* texture);
+
 void ceeGraphicsStartFrame(ceeGraphicsState* state);
 void ceeGraphicsFlushTriangles(uint32_t vertexCount);
 void ceeGraphicsFlushLines(uint32_t indicesCount);
 void ceeGraphicsFlushLineStrip(uint32_t vertexCount, uint32_t firstVertex);
+void ceeGraphicsFlushQuads(uint32_t indexCount);
 void ceeGraphicsEndFrame(ceeGraphicsState* state);
 
 void ceeGraphicsClearColor(float r, float g, float b, float a);

@@ -75,6 +75,8 @@ float* createPeakChevrons(
 		size_t length,
 		float yAlignment,
 		float scale,
+		float xScale,
+		float xAlignment,
 		float r,
 		float g,
 		float b,
