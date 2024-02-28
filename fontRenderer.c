@@ -16,9 +16,6 @@
 #define MAX_INDICES 1020
 #define MAX_VERTICES 680
 
-#define TEX_WIDTH  1024
-#define TEX_HEIGHT 1024
-
 static const char g_VertexShader[] =
 		"attribute vec4 aPosition;\n"
 		"attribute vec4 aColor;\n"
@@ -46,42 +43,21 @@ static const char g_FragmentShader[] =
 		"}\n";
 
 static uint32_t g_ShaderProgram;
-uint32_t g_FontTexId;
+static uint32_t g_FontTexId;
 static uint32_t g_Vbo, g_Ibo;
-static float* g_VerticesBase;
 static float* g_Vertices;
 static ceeGraphicsVertexBufferElement* g_VboLayout;
+static uint32_t g_ScreenWidth;
+static uint32_t g_ScreenHeight;
 
-static stbtt_bakedchar* g_BakedChars;
 
-int32_t ceeFontRendererIntialize(const char* fontFile, float scale) {
-	int32_t ttfFile = open(fontFile, O_RDONLY);
-	if (ttfFile < 0) {
-		printf("Failed to open font \"%s\". Error: \"%s\" (%d)\n", fontFile, strerror(errno), errno);
-		return -1;
-	}
-	size_t ttfFileSize = lseek(ttfFile, 0, SEEK_END);
-	lseek(ttfFile, 0, SEEK_SET);
+struct _ceeFont {
+	stbtt_bakedchar* bakedChars;
+	uint32_t fontTexId;
+	uint32_t texWidth, texHeight;
+};
 
-	uint8_t* ttfData = (uint8_t*)malloc(ttfFileSize);
-	if (read(ttfFile, ttfData, ttfFileSize) < ttfFileSize) {
-		printf("Failed to read entire ttf file\n");
-		return -1;
-	}
-	close(ttfFile);
-	ttfFile = 0;
-
-	g_BakedChars = (stbtt_bakedchar*)calloc(93, sizeof(stbtt_bakedchar));
-	uint8_t* pixels = (uint8_t*)calloc(TEX_WIDTH * TEX_HEIGHT, sizeof(uint8_t));
-	stbtt_BakeFontBitmap(ttfData, 0, scale, pixels, TEX_WIDTH, TEX_HEIGHT, 32, 93, g_BakedChars);
-	free(ttfData);
-	ttfData = NULL;
-
-	ceeGraphicsCreateTexture(&g_FontTexId);
-	ceeGraphicsBindTexture(g_FontTexId);
-	ceeGraphicsSetTextureData(TEX_HEIGHT, TEX_WIDTH, GL_FORMAT_ALPHA, GL_TYPE_UNSIGNED_BYTE, pixels);
-	free(pixels);
-
+int32_t ceeFontRendererIntialize(uint32_t screenWidth, uint32_t screenHeight) {
 	const char* shaderAttribNames[] = {
 		"aPosition",
 		"aColor",
@@ -143,7 +119,9 @@ int32_t ceeFontRendererIntialize(const char* fontFile, float scale) {
 
 	free(indices);
 	g_Vertices = calloc(MAX_VERTICES, 10 * sizeof(float));
-	g_VerticesBase = g_Vertices;
+
+	g_ScreenWidth = screenWidth;
+	g_ScreenHeight = screenHeight;
 
 	return 0;
 }
@@ -156,7 +134,54 @@ void ceeFontRendererShutdown() {
 		free(g_Vertices);
 }
 
-void ceeFontRendererDraw(const char* str, float screenWidth, float screenHeight, float* x, float* y) {
+ceeFont* ceeFontRendererCreateFont(const char* fontFile, float scale, uint32_t texWidth, uint32_t texHeight) {
+	ceeFont* font = calloc(1, sizeof(ceeFont));
+	font->texWidth = texWidth;
+	font->texHeight = texHeight;
+
+	int32_t ttfFile = open(fontFile, O_RDONLY);
+	if (ttfFile < 0) {
+		printf("Failed to open font \"%s\". Error: \"%s\" (%d)\n", fontFile, strerror(errno), errno);
+		return NULL;
+	}
+	size_t ttfFileSize = lseek(ttfFile, 0, SEEK_END);
+	lseek(ttfFile, 0, SEEK_SET);
+
+	uint8_t* ttfData = (uint8_t*)malloc(ttfFileSize);
+	if (read(ttfFile, ttfData, ttfFileSize) < ttfFileSize) {
+		printf("Failed to read entire ttf file\n");
+		free(ttfData);
+		close(ttfFile);
+		return NULL;
+	}
+	close(ttfFile);
+	ttfFile = 0;
+
+	font->bakedChars = (stbtt_bakedchar*)calloc(93, sizeof(stbtt_bakedchar));
+	uint8_t* pixels = (uint8_t*)calloc(font->texWidth * font->texHeight, sizeof(uint8_t));
+	stbtt_BakeFontBitmap(ttfData, 0, scale, pixels, font->texWidth, font->texHeight, 32, 93, font->bakedChars);
+	free(ttfData);
+	ttfData = NULL;
+
+	ceeGraphicsCreateTexture(&font->fontTexId);
+	ceeGraphicsBindTexture(font->fontTexId);
+	ceeGraphicsSetTextureData(font->texWidth, font->texHeight, GL_FORMAT_ALPHA, GL_TYPE_UNSIGNED_BYTE, pixels);
+	free(pixels);
+
+	return font;
+}
+
+void ceeFontRendererDeleteFont(ceeFont* font) {
+	if (font) {
+		if (font->bakedChars) {
+			free(font->bakedChars);
+		}
+		ceeGraphicsDeleteTexture(&font->fontTexId);
+		free(font);
+	}
+}
+
+void ceeFontRendererDraw(ceeFont* font, const char* str, float* x, float* y) {
 	uint32_t chars = strlen(str);
 	if (chars == 0)
 		return;
@@ -167,13 +192,13 @@ void ceeFontRendererDraw(const char* str, float screenWidth, float screenHeight,
 
 	for (uint32_t i = 0; i < chars; i++) {
 		stbtt_aligned_quad q;
-		stbtt_GetBakedQuad(g_BakedChars, TEX_WIDTH, TEX_HEIGHT, *(str+i) - 32, x, y, &q, 1);
+		stbtt_GetBakedQuad(font->bakedChars, font->texWidth, font->texHeight, *(str+i) - 32, x, y, &q, 1);
 
 		float vertices[] = {
-			q.x0/(screenWidth / 2) - 1.0f, q.y1/(screenHeight / 2) - 1.0f, 0.0f, 1.0f,    0.0f, 1.0f, 0.0f, 1.0f,    q.s0, q.t0,
-			q.x0/(screenWidth / 2) - 1.0f, q.y0/(screenHeight / 2) - 1.0f, 0.0f, 1.0f,    0.0f, 1.0f, 0.0f, 1.0f,    q.s0, q.t1,
-			q.x1/(screenWidth / 2) - 1.0f, q.y0/(screenHeight / 2) - 1.0f, 0.0f, 1.0f,    0.0f, 1.0f, 0.0f, 1.0f,    q.s1, q.t1,
-			q.x1/(screenWidth / 2) - 1.0f, q.y1/(screenHeight / 2) - 1.0f, 0.0f, 1.0f,    0.0f, 1.0f, 0.0f, 1.0f,    q.s1, q.t0,
+			q.x0/(g_ScreenWidth / 2.0f) - 1.0f, q.y1/(g_ScreenHeight / 2.0f) - 1.0f, 0.0f, 1.0f,    0.0f, 1.0f, 0.0f, 1.0f,    q.s0, q.t0,
+			q.x0/(g_ScreenWidth / 2.0f) - 1.0f, q.y0/(g_ScreenHeight / 2.0f) - 1.0f, 0.0f, 1.0f,    0.0f, 1.0f, 0.0f, 1.0f,    q.s0, q.t1,
+			q.x1/(g_ScreenWidth / 2.0f) - 1.0f, q.y0/(g_ScreenHeight / 2.0f) - 1.0f, 0.0f, 1.0f,    0.0f, 1.0f, 0.0f, 1.0f,    q.s1, q.t1,
+			q.x1/(g_ScreenWidth / 2.0f) - 1.0f, q.y1/(g_ScreenHeight / 2.0f) - 1.0f, 0.0f, 1.0f,    0.0f, 1.0f, 0.0f, 1.0f,    q.s1, q.t0,
 		};
 		memcpy(g_Vertices + (i * quadVerticesSize), vertices, quadVerticesSize * sizeof(float));
 	}
@@ -181,6 +206,7 @@ void ceeFontRendererDraw(const char* str, float screenWidth, float screenHeight,
 	ceeGraphicsBindIndexBuffer(g_Ibo);
 	ceeGraphicsUseShaderProgram(g_ShaderProgram);
 	ceeGraphicsSetVertexBufferLayout(g_VboLayout, 3, 10 * sizeof(float));
+	ceeGraphicsBindTexture(font->fontTexId);
 	ceeGraphicsFlushQuads(chars * 6);
 }
 

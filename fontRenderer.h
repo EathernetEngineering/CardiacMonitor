@@ -8,15 +8,17 @@
 extern "C" {
 #endif
 
-int32_t ceeFontRendererIntialize(const char* fontFile, float scale);
+typedef struct _ceeFont ceeFont;
+
+
+int32_t ceeFontRendererIntialize(uint32_t screenWidth, uint32_t screenHeight);
+ceeFont* ceeFontRendererCreateFont(const char* fontFile, float scale, uint32_t texWidth, uint32_t texHeight);
+void ceeFontRendererDeleteFont(ceeFont* font);
 void ceeFontRendererShutdown();
 
-// TODO: Maybe add ability for user to provide vertex buffer for batching, or
-// make user call a flush function so there isnt a draw call on every call to
-// this function?
-//
 // x and y are in screen space
-void ceeFontRendererDraw(const char* str, float screenWidth, float screenHeight, float* x, float* y);
+void ceeFontRendererDraw(ceeFont* font, const char* str, float* x, float* y);
+void ceeFontRendererFlush();
 
 #if defined(__cplusplus)
 }

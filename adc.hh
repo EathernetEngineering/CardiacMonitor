@@ -18,8 +18,8 @@ namespace cee {
 
 		void SetAutoIncrement(bool autoIncrement);
 
-		uint16_t ReadChannel(uint32_t channel);
-		uint16_t Read();
+		uint8_t ReadChannel(uint32_t channel);
+		uint8_t Read();
 
 	private:
 		void SetControlByte();
