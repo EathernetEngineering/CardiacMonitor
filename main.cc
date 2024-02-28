@@ -84,15 +84,14 @@ void doAlarms() {
 	using namespace std::chrono_literals;
 
 	auto start = std::chrono::high_resolution_clock::now();
-	ceeAudioState* cyanAlarm = ceeAudioMallocState();
-	ceeAudioInitialize(cyanAlarm);
-	ceeAudioOpenWav(cyanAlarm, "/home/chloe/Music/Philips intellivue cyan.wav");
-	ceeAudioState* yellowAlarm = ceeAudioMallocState();
-	ceeAudioInitialize(yellowAlarm);
-	ceeAudioOpenWav(yellowAlarm, "/home/chloe/Music/Philips intellivue yellow.wav");
-	ceeAudioState* redAlarm = ceeAudioMallocState();
-	ceeAudioInitialize(redAlarm);
-	ceeAudioOpenWav(redAlarm, "/home/chloe/Music/Philips intellivue red.wav");
+	ceeAudioPlayer* player = ceeAudioAllocatePlayer();
+	ceeAudioInitialize(player);
+	ceeAudioOutStream* cyanAlarm = ceeAudioAllocateOutStream();
+	ceeAudioOpenWav(player, cyanAlarm, "/home/chloe/Music/Philips intellivue cyan.wav");
+	ceeAudioOutStream* yellowAlarm = ceeAudioAllocateOutStream();
+	ceeAudioOpenWav(player, yellowAlarm, "/home/chloe/Music/Philips intellivue yellow.wav");
+	ceeAudioOutStream* redAlarm = ceeAudioAllocateOutStream();
+	ceeAudioOpenWav(player, redAlarm, "/home/chloe/Music/Philips intellivue red.wav");
 
 	for (;;) {
 		if ((std::chrono::high_resolution_clock::now() - start) > g_AlarmTimes[int(g_AlarmSound)]) {
@@ -103,19 +102,19 @@ void doAlarms() {
 
 				case AlarmSounds::CYAN:
 					{
-						ceeAudioPlay(cyanAlarm);
+						ceeAudioPlay(player, cyanAlarm);
 					}
 					break;
 
 				case AlarmSounds::YELLOW:
 					{
-						ceeAudioPlay(yellowAlarm);
+						ceeAudioPlay(player, yellowAlarm);
 					}
 					break;
 
 				case AlarmSounds::RED:
 					{
-						ceeAudioPlay(redAlarm);
+						ceeAudioPlay(player, redAlarm);
 					}
 					break;
 
@@ -129,12 +128,11 @@ void doAlarms() {
 			break;
 		}
 	}
-	ceeAudioShutdown(cyanAlarm);
-	ceeAudioFreeState(cyanAlarm);
-	ceeAudioShutdown(yellowAlarm);
-	ceeAudioFreeState(yellowAlarm);
-	ceeAudioShutdown(redAlarm);
-	ceeAudioFreeState(redAlarm);
+	ceeAudioFreeOutStream(cyanAlarm);
+	ceeAudioFreeOutStream(yellowAlarm);
+	ceeAudioFreeOutStream(redAlarm);
+	ceeAudioShutdown(player);
+	ceeAudioFreePlayer(player);
 }
 
 void doSensors() {

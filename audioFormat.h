@@ -54,9 +54,9 @@ typedef struct {
 #define WAV_FMT_EXTENSIBLE       0xFFFE
 
 typedef struct {
-	char magic[4];
+	uint32_t magic;
 	uint32_t length;
-	char type[4];
+	uint32_t type;
 } __attribute__((packed)) WaveHeader;
 
 typedef struct {
@@ -69,7 +69,7 @@ typedef struct {
 } __attribute__((packed)) WaveFmtBody;
 
 typedef struct {
-	char type[4];
+	uint32_t type;
 	uint32_t length;
 } __attribute__((packed)) WaveChunkHeader;
 

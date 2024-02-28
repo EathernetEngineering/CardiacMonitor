@@ -1,6 +1,5 @@
 #include "audio.h"
 
-#include <stdarg.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,8 +8,6 @@
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <limits.h>
-#include <signal.h>
 #include <sys/time.h>
 #include <unistd.h>
 
@@ -21,225 +18,154 @@
 #include "audioFormat.h"
 #include "util.h"
 
-static void XRun(snd_pcm_t* handle, int32_t monotonic);
+#define MAX_AUDIO_BUFFER_SIZE 0x800000 
 
-struct _ceeAudioState {
+static void XRun(snd_pcm_t* handle, int32_t monotonic);
+static void ParseWaveHeaders(ceeAudioPlayer* player,
+							 ceeAudioOutStream* stream,
+							 int32_t fd,
+							 off_t* dataChunkStart);
+static void Prepare(ceeAudioPlayer* player, ceeAudioOutStream* stream);
+static void PlayBuffer(ceeAudioPlayer* player, ceeAudioOutStream* stream);
+static void PlayStream(ceeAudioPlayer* player, ceeAudioOutStream* stream);
+
+struct _ceeAudioPlayer {
 	snd_pcm_t* handle;
-	int32_t rate;
-	int32_t channels;
 
 	snd_pcm_hw_params_t* hwParams;
 	snd_pcm_sw_params_t* swParams;
-	int monotonic;
+	int32_t monotonic;
 
 	snd_pcm_uframes_t bufferSize;
 	snd_pcm_uframes_t chunkSize;
 	uint16_t frameSize;
+};
+
+struct _ceeAudioStream {
+	int32_t fd;
+	off_t audioStart;
+	off_t currentOffset; // relative to audioStart
 
 	uint8_t* audioBuffer;
 	size_t audioBufferSize;
+
+	int32_t wholeBufferLoaded;
+
+	snd_pcm_hw_params_t* hwParams;
+	snd_pcm_sw_params_t* swParams;
+
+	uint32_t rate;
+	uint32_t channels;
+
+	uint32_t bytesPerSample;
 };
 
-ceeAudioState* ceeAudioMallocState() {
-	return calloc(1, sizeof(ceeAudioState));
+ceeAudioPlayer* ceeAudioAllocatePlayer() {
+	return calloc(1, sizeof(struct _ceeAudioPlayer));
 }
 
-void ceeAudioFreeState(ceeAudioState* state) {
-	free(state);
+ceeAudioInStream* ceeAudioAllocateInStream() {
+	return calloc(1, sizeof(struct _ceeAudioStream));
 }
 
-void ceeAudioInitialize(ceeAudioState* state) {
+ceeAudioOutStream* ceeAudioAllocateOutStream() {
+	return calloc(1, sizeof(struct _ceeAudioStream));
+}
+
+void ceeAudioFreePlayer(ceeAudioPlayer* player) {
+	free(player);
+}
+
+void ceeAudioFreeInStream(ceeAudioInStream* stream) {
+	if (stream->hwParams) {
+		snd_pcm_hw_params_free(stream->hwParams);
+		stream->hwParams = NULL;
+	}
+	if (stream->swParams) {
+		snd_pcm_sw_params_free(stream->swParams);
+		stream->swParams = NULL;
+	}
+	if (stream)
+		free(stream);
+}
+
+void ceeAudioFreeOutStream(ceeAudioOutStream* stream) {
+	if (stream->hwParams) {
+		snd_pcm_hw_params_free(stream->hwParams);
+		stream->hwParams = NULL;
+	}
+	if (stream->swParams) {
+		snd_pcm_sw_params_free(stream->swParams);
+		stream->swParams = NULL;
+	}
+	if (stream->audioBuffer) {
+		free(stream->audioBuffer);
+		stream->audioBuffer = NULL;
+	}
+	if (stream)
+		free(stream);
+}
+
+void ceeAudioInitialize(ceeAudioPlayer* player) {
 	int32_t result;
-	result = snd_pcm_open(&state->handle, "default", SND_PCM_STREAM_PLAYBACK, 0);
-	assert(result >= 0);
+	const char* device = "default";
+	result = snd_pcm_open(&player->handle, device, SND_PCM_STREAM_PLAYBACK, 0);
+	snd_pcm_hw_params_malloc(&player->hwParams);
+	snd_pcm_sw_params_malloc(&player->swParams);
+	assert(result >= 0 && "Failed to open PCM device");
 }
 
-void ceeAudioShutdown(ceeAudioState* state) {
-	if (state->audioBuffer) {
-		free(state->audioBuffer);
-		state->audioBuffer = NULL;
-		state->audioBufferSize = 0;
+void ceeAudioShutdown(ceeAudioPlayer* player) {
+	if (player->hwParams) {
+		snd_pcm_hw_params_free(player->hwParams);
+		player->hwParams = NULL;
 	}
-	if (state->hwParams) {
-		free(state->hwParams);
-		state->hwParams = NULL;
+	if (player->swParams) {
+		snd_pcm_sw_params_free(player->swParams);
+		player->swParams = NULL;
 	}
-	if (state->swParams) {
-		free(state->swParams);
-		state->swParams = NULL;
-	}
-	snd_pcm_close(state->handle);
+	snd_pcm_close(player->handle);
 };
 
-void ceeAudioOpenWav(ceeAudioState* state, const char* filename) {
-	uint8_t* fileBuffer;
+void ceeAudioOpenWav(ceeAudioPlayer* player, ceeAudioOutStream* stream, const char* filename) {
 	ssize_t result;
-	int32_t fd;
-	WaveFmtBody fmt;
 	WaveChunkHeader chunkHeader;
-	snd_pcm_uframes_t bufferSize;
-	snd_pcm_uframes_t periodSize;
 
-	fileBuffer = malloc(sizeof(WaveHeader));
-	assert(fileBuffer != 0);
+	stream->fd = open(filename, O_RDONLY);
 
-	fd = open(filename, O_RDONLY);
-	assert(fd != -1);
-
-	result = read(fd, fileBuffer, sizeof(WaveHeader));
-	assert(result == sizeof(WaveHeader));
-
-	result = read(fd, &chunkHeader, sizeof(WaveChunkHeader));
-	assert(result == sizeof(WaveChunkHeader));
-
-	assert(memcmp(chunkHeader.type, "fmt ", 4) == 0);
-	assert(chunkHeader.length == 16);
-
-	result = read(fd, &fmt, sizeof(WaveFmtBody));
-	assert(result == sizeof(WaveFmtBody));
-
-	// Do FMT/Config.
-	snd_pcm_hw_params_malloc(&state->hwParams);
-	snd_pcm_sw_params_malloc(&state->swParams);
-
-	// Read hw params.
-	result = snd_pcm_hw_params_any(state->handle, state->hwParams);
-	assert(result >= 0);
-
-	// Set hw params.
-	result = snd_pcm_hw_params_set_access(state->handle, state->hwParams,
-			SND_PCM_ACCESS_RW_INTERLEAVED);
-	assert(result >= 0);
-
-	snd_pcm_format_t format;
-	switch(LE_SHORT(fmt.bitPerSample)) {
-		case 8:
-			format = SND_PCM_FORMAT_U8;
-			break;
-
-		case 16:
-			format = SND_PCM_FORMAT_S16_LE;
-			break;
-
-		case 24:
-			switch(LE_SHORT(fmt.bytePerSample) / LE_SHORT(fmt.channels)) {
-				case 3:
-					format = SND_PCM_FORMAT_S24_3LE;
-					break;
-
-				case 4:
-					format = SND_PCM_FORMAT_S24_LE;
-					break;
-
-				default:
-					assert(0);
-			}
-
-		case 32:
-			if (LE_SHORT(fmt.format) == WAV_FMT_PCM) {
-				format = SND_PCM_FORMAT_S32_LE;
-				break;
-			} else if (LE_SHORT(fmt.format) == WAV_FMT_IEEE_FLOAT) {
-				format = SND_PCM_FORMAT_FLOAT_LE;
-				break;
-			}
-			// fall through
-
-		default:
-			assert(0);
-	}
-
-	result = snd_pcm_hw_params_set_format(state->handle, state->hwParams,
-			format);
-	assert(result >= 0);
-
-	result = snd_pcm_hw_params_set_channels(state->handle, state->hwParams,
-			LE_SHORT(fmt.channels));
-	assert(result >= 0);
-
-	uint32_t rate = LE_INT(fmt.sampleFreq);
-	result = snd_pcm_hw_params_set_rate_near(state->handle, state->hwParams,
-			&rate, 0);
-	assert(result >= 0);
-	if (rate != LE_INT(fmt.sampleFreq)) {
-		// TODO warn about rate mismatch.
-	}
-
-	result = snd_pcm_hw_params_get_buffer_size_max(state->hwParams,
-			&bufferSize);
-	assert(result >= 0);
-
-	periodSize = bufferSize / 4;
-	result = snd_pcm_hw_params_set_period_size_near(state->handle, state->hwParams,
-			&periodSize, 0);
-	assert(result >= 0);
-	result = snd_pcm_hw_params_set_buffer_size_near(state->handle, state->hwParams,
-			&bufferSize);
-	assert(result >= 0);
-
-	// Write hw Params.
-	result = snd_pcm_hw_params(state->handle, state->hwParams);
-	assert(result >= 0);
-
-	snd_pcm_hw_params_get_period_size(state->hwParams, &state->chunkSize, 0);
-	snd_pcm_hw_params_get_buffer_size(state->hwParams, &state->bufferSize);
-	state->frameSize = fmt.bytePerSample;
-
-	state->monotonic = snd_pcm_hw_params_is_monotonic(state->hwParams);
+	ParseWaveHeaders(player, stream, stream->fd, &stream->audioStart);
+	
 
 	// Do audio buffer read.
-	result = read(fd, &chunkHeader, sizeof(WaveChunkHeader));
-	assert(result == sizeof(WaveChunkHeader));
+	result = read(stream->fd, &chunkHeader, sizeof(WaveChunkHeader));
+	assert(result == sizeof(WaveChunkHeader) && "Failed to read header. Corrupt file?");
+	while (chunkHeader.type != WAV_DATA) {
+		lseek(stream->fd, LE_INT(chunkHeader.length), SEEK_CUR);
+		read(stream->fd, &chunkHeader, sizeof(WaveChunkHeader));
+		assert(result == sizeof(WaveChunkHeader) && "Failed to read header. EOF?");
+	}
 
-	assert(memcmp(chunkHeader.type, "data", 4) == 0);
+	if (LE_INT(chunkHeader.length) <= MAX_AUDIO_BUFFER_SIZE) { 
+		stream->audioBufferSize = LE_INT(chunkHeader.length);
+		stream->audioBuffer = malloc(stream->audioBufferSize);
+		assert(stream->audioBuffer != NULL);
 
-	state->audioBufferSize = LE_INT(chunkHeader.length);
-	state->audioBuffer = malloc(state->audioBufferSize);
-	assert(state->audioBuffer != NULL);
+		result = read(stream->fd, stream->audioBuffer, stream->audioBufferSize);
+		assert(result == stream->audioBufferSize);
 
-	result = read(fd, state->audioBuffer, state->audioBufferSize);
-	assert(result == state->audioBufferSize);
+		close(stream->fd);
 
-	free(fileBuffer);
-	close(fd);
+		stream->wholeBufferLoaded = 1;
+	} else {
+		assert(!"Not yet implemented");
+	}
 }
 
-void ceeAudioPlay(ceeAudioState* state) {
-	int32_t i = 0;
-	int32_t result;
-	const uint32_t chunkBytes = state->chunkSize * state->frameSize;
-	while (i < state->audioBufferSize) {
-		if (state->audioBufferSize - i < chunkBytes) {
-			result = snd_pcm_writei(state->handle, state->audioBuffer + i, (state->audioBufferSize - i) / state->frameSize);
-			if (result < 0) {
-				if (result == -EPIPE) {
-					XRun(state->handle, state->monotonic);
-				}
-				else {
-					printf("Failed to write to pcm: %s (%i)\n", snd_strerror(result), result);
-					fflush(stdout);
-					assert(0);
-				}
-			}
-			break;
-		}
-		result = snd_pcm_writei(state->handle, state->audioBuffer + i, state->chunkSize);
-		if (result < 0) {
-			if (result == -EPIPE) {
-				XRun(state->handle, state->monotonic);
-			}
-			else {
-				printf("Failed to write to pcm: %s (%i)\n", snd_strerror(result), result);
-				fflush(stdout);
-				assert(0);
-			}
-		}
-		if (result > 0) {
-			i += result * state->frameSize;
-		}
-	}
-	snd_pcm_drain(state->handle);
-	snd_pcm_prepare(state->handle);
+void ceeAudioPlay(ceeAudioPlayer* player, ceeAudioOutStream* stream) {
+	if (stream->wholeBufferLoaded)
+		PlayBuffer(player, stream);
+	else
+		PlayStream(player, stream);
 }
 
 static void XRun(snd_pcm_t* handle, int32_t monotonic) {
@@ -275,5 +201,191 @@ static void XRun(snd_pcm_t* handle, int32_t monotonic) {
 		printf("Draining");
 	}
 	assert(0);
+}
+
+static void ParseWaveHeaders(ceeAudioPlayer* player,
+							 ceeAudioOutStream* stream,
+							 int32_t fd,
+							 off_t* dataChunkStart) {
+	uint8_t* fileBuffer = NULL;
+	size_t fileSize = 0;
+	snd_pcm_uframes_t bufferSize = 0;
+	snd_pcm_uframes_t periodSize = 0;
+	uint32_t rate = 0;
+	WaveFmtBody fmt;
+	WaveChunkHeader chunkHeader;
+	snd_pcm_format_t format;
+	ssize_t result = 0;
+
+	fileSize = lseek(fd, 0, SEEK_END);
+	lseek(fd, 0, SEEK_SET);
+
+	memset(&fmt, 0, sizeof(WaveFmtBody));
+	memset(&chunkHeader, 0, sizeof(WaveChunkHeader));
+
+	fileBuffer = malloc(sizeof(WaveHeader));
+	assert(fileBuffer != 0 && "malloc failed");
+
+	result = read(fd, fileBuffer, sizeof(WaveHeader));
+	assert(result == sizeof(WaveHeader) && "Failed to read from file");
+
+	assert(((WaveHeader*)fileBuffer)->magic == WAV_RIFF && "Not a WAVE file");
+	assert(((WaveHeader*)fileBuffer)->type  == WAV_WAVE && "Not a WAVE file");
+
+	free(fileBuffer);
+
+	read(fd, &chunkHeader, sizeof(WaveChunkHeader));
+	while (chunkHeader.type != WAV_FMT) {
+		lseek(fd, LE_INT(chunkHeader.length), SEEK_CUR);
+		result = read(fd, &chunkHeader, sizeof(WaveChunkHeader));
+		assert(result == sizeof(WaveChunkHeader) && "Read Failed. EOF?");
+	}
+
+	result = read(fd, &fmt, sizeof(WaveFmtBody));
+	assert(result == sizeof(WaveFmtBody) && "Read Failed. Corrupt file?");
+
+	snd_pcm_hw_params_malloc(&stream->hwParams);
+	snd_pcm_sw_params_malloc(&stream->swParams);
+
+	result = snd_pcm_hw_params_any(player->handle, stream->hwParams);
+	assert(result >= 0 && "Failed to get hw params");
+
+	result = snd_pcm_hw_params_set_access(player->handle, stream->hwParams,
+									   SND_PCM_ACCESS_RW_INTERLEAVED);
+	assert(result >= 0 && "Failed to set pcm access");
+
+	switch (LE_SHORT(fmt.bitPerSample)) {
+		case 8:
+			format = SND_PCM_FORMAT_U8;
+			break;
+
+		case 16:
+			format = SND_PCM_FORMAT_S16_LE;
+			break;
+
+		case 24:
+			switch(LE_SHORT(fmt.bytePerSample) / LE_SHORT(fmt.channels)) {
+				case 3:
+					format = SND_PCM_FORMAT_S24_3LE;
+					break;
+
+				case 4:
+					format = SND_PCM_FORMAT_S24_LE;
+					break;
+
+				default:
+					assert(0);
+			}
+
+		case 32:
+			if (LE_SHORT(fmt.format) == WAV_FMT_PCM) {
+				format = SND_PCM_FORMAT_S32_LE;
+				break;
+			} else if (LE_SHORT(fmt.format) == WAV_FMT_IEEE_FLOAT) {
+				format = SND_PCM_FORMAT_FLOAT_LE;
+				break;
+			}
+			// fall through
+
+		default:
+			assert(!"Invalid format");
+	}
+
+	result = snd_pcm_hw_params_set_format(player->handle, stream->hwParams, format);
+	assert(result >= 0 && "Failed to set format");
+
+	result = snd_pcm_hw_params_set_channels(player->handle, stream->hwParams,
+										 LE_SHORT(fmt.channels));
+	assert(result >= 0 && "Failed to set channel count");
+	stream->channels = LE_SHORT(fmt.channels);
+
+	stream->rate = LE_INT(fmt.sampleFreq);
+	result = snd_pcm_hw_params_set_rate_near(player->handle, stream->hwParams, &stream->rate, 0);
+	assert(result >= 0 && "Failed to set frequency");
+
+	if (stream->rate != LE_INT(fmt.sampleFreq)) {
+		printf("Sample rate mismatch! Requested rate: %u\tActual rate: %u\n",
+		 LE_INT(fmt.sampleFreq), stream->rate);
+	}
+
+	result = snd_pcm_hw_params_get_buffer_size_max(stream->hwParams, &bufferSize);
+	assert(result >= 0 && "Failed to get buffer size");
+
+	periodSize = bufferSize / 4;
+	result = snd_pcm_hw_params_set_period_size_near(player->handle, stream->hwParams,
+												 &periodSize, 0);
+	assert(result >= 0 && "Failed to set period size");
+
+	result = snd_pcm_hw_params_set_buffer_size_near(player->handle, stream->hwParams,
+												 &bufferSize);
+	assert(result >= 0 && "Failed to set buffer size");
+
+	result = snd_pcm_hw_params(player->handle, stream->hwParams);
+	assert(result >= 0 && "Failed to set hw params");
+
+	stream->bytesPerSample = fmt.bitPerSample / 8;
+}
+
+static void Prepare(ceeAudioPlayer* player, ceeAudioOutStream* stream) {
+	ssize_t result = 0;
+	snd_pcm_hw_params_copy(player->hwParams, stream->hwParams);
+	snd_pcm_sw_params_copy(player->swParams, stream->swParams);
+
+	result = snd_pcm_hw_params(player->handle, player->hwParams);
+	assert(result >= 0 && "Failed to copy hw params");
+
+	snd_pcm_hw_params_get_period_size(player->hwParams, &player->chunkSize, 0);
+	snd_pcm_hw_params_get_buffer_size(player->hwParams, &player->bufferSize);
+	player->frameSize = stream->bytesPerSample;
+
+	player->monotonic = snd_pcm_hw_params_is_monotonic(player->hwParams);
+}
+
+static void PlayBuffer(ceeAudioPlayer* player, ceeAudioOutStream* stream) {
+	int32_t i = 0;
+	int32_t result;
+	
+	Prepare(player, stream);
+	const uint32_t chunkBytes = player->chunkSize * player->frameSize;
+
+	while (i < stream->audioBufferSize) {
+		if (stream->audioBufferSize - i < chunkBytes) {
+			result = snd_pcm_writei(player->handle, stream->audioBuffer + i,
+						   (stream->audioBufferSize - i) / player->frameSize);
+			if (result < 0) {
+				if (result == -EPIPE) {
+					XRun(player->handle, player->monotonic);
+				}
+				else {
+					printf("Failed to write to pcm: %s (%i)\n", snd_strerror(result), result);
+					fflush(stdout);
+					assert(0);
+				}
+			}
+			break;
+		}
+		result = snd_pcm_writei(player->handle, stream->audioBuffer + i, player->chunkSize);
+		if (result < 0) {
+			if (result == -EPIPE) {
+				XRun(player->handle, player->monotonic);
+			}
+			else {
+				printf("Failed to write to pcm: %s (%i)\n", snd_strerror(result), result);
+				fflush(stdout);
+				assert(0);
+			}
+		}
+		if (result > 0) {
+			i += result * player->frameSize;
+		}
+	}
+	snd_pcm_drain(player->handle);
+	snd_pcm_prepare(player->handle);
+}
+
+static void PlayStream(ceeAudioPlayer* player, ceeAudioOutStream* stream) {
+	(void)player;
+	(void)stream;
+	assert(!"Not yet implemented.");
 }
 

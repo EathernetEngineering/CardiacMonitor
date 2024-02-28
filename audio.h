@@ -2,22 +2,29 @@
 #define CEE_AUDIO_H_
 
 #include <alloca.h>
+#include <stddef.h>
 
 #if defined(__cplusplus)
 extern "C" {
 #endif
 
-typedef struct _ceeAudioState ceeAudioState;
+typedef struct _ceeAudioPlayer ceeAudioPlayer;
+typedef struct _ceeAudioStream ceeAudioInStream;
+typedef struct _ceeAudioStream ceeAudioOutStream;
 
-ceeAudioState* ceeAudioMallocState();
-void ceeAudioFreeState(ceeAudioState* state);
+ceeAudioPlayer* ceeAudioAllocatePlayer();
+ceeAudioInStream* ceeAudioAllocateInStream();
+ceeAudioOutStream* ceeAudioAllocateOutStream();
+void ceeAudioFreePlayer(ceeAudioPlayer* player);
+void ceeAudioFreeInStream(ceeAudioInStream* stream);
+void ceeAudioFreeOutStream(ceeAudioOutStream* stream);
 
-void ceeAudioInitialize(ceeAudioState* state);
-void ceeAudioShutdown(ceeAudioState* state);
+void ceeAudioInitialize(ceeAudioPlayer* player);
+void ceeAudioShutdown(ceeAudioPlayer* player);
 
-void ceeAudioOpenWav(ceeAudioState* state, const char* filename);
+void ceeAudioOpenWav(ceeAudioPlayer* player, ceeAudioOutStream* stream, const char* filename);
 
-void ceeAudioPlay(ceeAudioState* state);
+void ceeAudioPlay(ceeAudioPlayer* player, ceeAudioOutStream* stream);
 
 #if defined(__cplusplus)
 }
