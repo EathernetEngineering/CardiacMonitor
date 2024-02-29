@@ -1,5 +1,6 @@
 #include "audio.h"
 
+#include <asm-generic/errno.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,6 +22,7 @@
 #define MAX_AUDIO_BUFFER_SIZE 0x800000 
 
 static void XRun(snd_pcm_t* handle, int32_t monotonic);
+static void Suspend(snd_pcm_t* handle);
 static void ParseWaveHeaders(ceeAudioPlayer* player,
 							 ceeAudioOutStream* stream,
 							 int32_t fd,
@@ -203,6 +205,25 @@ static void XRun(snd_pcm_t* handle, int32_t monotonic) {
 	assert(0);
 }
 
+static void Suspend(snd_pcm_t* handle) {
+	int32_t result;
+
+	printf("Audio stream suspended. Trying resume.\n");
+	while ((result = snd_pcm_resume(handle)) == -EAGAIN) {
+		sleep(1);
+	}
+
+	if (result < 0) {
+		printf("Failed to restart audio stream in Suspend.\n");
+		if ((result = snd_pcm_prepare(handle)) < 0) {
+			printf("Failed to prepare PCM in Suspend: %s (%i).\n", snd_strerror(result), result);
+			assert(0);
+		}
+	}
+
+	printf("Done resume.\n");
+}
+
 static void ParseWaveHeaders(ceeAudioPlayer* player,
 							 ceeAudioOutStream* stream,
 							 int32_t fd,
@@ -274,7 +295,7 @@ static void ParseWaveHeaders(ceeAudioPlayer* player,
 					break;
 
 				default:
-					assert(0);
+					assert(!"Invalid audio format");
 			}
 
 		case 32:
@@ -288,7 +309,7 @@ static void ParseWaveHeaders(ceeAudioPlayer* player,
 			// fall through
 
 		default:
-			assert(!"Invalid format");
+			assert(!"Invalid audio format");
 	}
 
 	result = snd_pcm_hw_params_set_format(player->handle, stream->hwParams, format);
@@ -352,28 +373,32 @@ static void PlayBuffer(ceeAudioPlayer* player, ceeAudioOutStream* stream) {
 		if (stream->audioBufferSize - i < chunkBytes) {
 			result = snd_pcm_writei(player->handle, stream->audioBuffer + i,
 						   (stream->audioBufferSize - i) / player->frameSize);
-			if (result < 0) {
-				if (result == -EPIPE) {
-					XRun(player->handle, player->monotonic);
-				}
-				else {
-					printf("Failed to write to pcm: %s (%i)\n", snd_strerror(result), result);
-					fflush(stdout);
-					assert(0);
-				}
-			}
-			break;
-		}
-		result = snd_pcm_writei(player->handle, stream->audioBuffer + i, player->chunkSize);
-		if (result < 0) {
-			if (result == -EPIPE) {
+	
+			if (result == -EAGAIN || (result  >= 0 && result < ((stream->audioBufferSize - i) / player->frameSize))) {
+				snd_pcm_wait(player->handle, 100);
+			} else if (result == -EPIPE) {
 				XRun(player->handle, player->monotonic);
-			}
-			else {
+			} else if (result == -ESTRPIPE) {
+				Suspend(player->handle);
+			} else if (result < 0) {
 				printf("Failed to write to pcm: %s (%i)\n", snd_strerror(result), result);
 				fflush(stdout);
 				assert(0);
 			}
+			break;
+		}
+		result = snd_pcm_writei(player->handle, stream->audioBuffer + i, player->chunkSize);
+		
+		if (result == -EAGAIN || (result  >= 0 && result < player->chunkSize)) {
+
+		} else if (result == -EPIPE) {
+			XRun(player->handle, player->monotonic);
+		} else if (result == -ESTRPIPE) {
+			Suspend(player->handle);
+		} else if (result < 0) {
+			printf("Failed to write to pcm: %s (%i)\n", snd_strerror(result), result);
+			fflush(stdout);
+			assert(0);
 		}
 		if (result > 0) {
 			i += result * player->frameSize;
